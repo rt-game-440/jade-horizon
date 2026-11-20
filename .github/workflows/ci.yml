@@ -50,14 +50,14 @@ jobs:
           key: build-${{ runner.os }}-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}
           restore-keys: build-${{ runner.os }}-
 
+      - name: 构建 wasm mod（check 需要它生成的 mod.wasm）
+        run: cargo horizon-mod build --wasm
+
       - name: 检查 API 用法
         run: cargo horizon-mod check
 
       - name: 单元测试
         run: cargo test
-
-      - name: 构建 wasm mod
-        run: cargo horizon-mod build --wasm
 
       - name: 上传 jade.hmod
         uses: actions/upload-artifact@v4

@@ -40,9 +40,9 @@ jobs:
           {
             cargo horizon-mod update
             echo "SDK: $(grep '^sdk' Cargo.toml)"
+            cargo horizon-mod build --wasm
             cargo horizon-mod check
             cargo test
-            cargo horizon-mod build --wasm
           } 2>&1 | tee build.log
 
       - name: 失败时开或更新 issue
