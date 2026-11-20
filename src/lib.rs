@@ -11,6 +11,7 @@ use mod_api::{
 };
 
 mod client;
+mod dropped;
 mod fluid;
 mod harvest;
 #[cfg(test)]

@@ -106,9 +106,11 @@ pub fn record_mining(prediction: &mod_api::ClientMiningPrediction) {
 
 /// 每个客户端 tick 调用：更新目标，返回需要发送的请求。
 pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
-    let fluid = fluid_target(host);
+    // 掉落物原版瞄不到，自己做射线；它比准星命中的东西近时，当作准星命中的实体。
+    let dropped = crate::dropped::target(host);
+    let fluid = if dropped.is_some() { None } else { fluid_target(host) };
     // 显示流体时不向服务端要数据（流体信息全在客户端算）。
-    let target = if fluid.is_some() { None } else { host.crosshair_target() };
+    let target = if fluid.is_some() { None } else { dropped.or_else(|| host.crosshair_target()) };
     let net = target.as_ref().and_then(net_target);
     // 先在锁内更新目标、取出服务端数据，放锁后再读宿主组装提示框。
     let (server, request, mining, tick) = {

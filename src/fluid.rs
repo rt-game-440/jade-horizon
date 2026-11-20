@@ -35,7 +35,7 @@ pub fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
 }
 
 /// 视线方向单位向量（Minecraft 约定：yaw 0 朝 +Z，pitch 为负向上看）。
-fn direction(yaw: f32, pitch: f32) -> [f64; 3] {
+pub fn direction(yaw: f32, pitch: f32) -> [f64; 3] {
     let (yaw, pitch) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
     let horizontal = pitch.cos();
     [-yaw.sin() * horizontal, -pitch.sin(), yaw.cos() * horizontal]
@@ -101,7 +101,8 @@ fn normalize(id: &str) -> String {
     }
 }
 
-fn reach(host: &dyn ClientHost) -> f64 {    host.local_player()
+pub fn reach(host: &dyn ClientHost) -> f64 {
+    host.local_player()
         .and_then(|player| host.living(player.entity()))
         .and_then(|living| living.attribute_value(host, "minecraft:block_interaction_range"))
         .unwrap_or(DEFAULT_REACH)

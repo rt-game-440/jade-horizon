@@ -268,6 +268,14 @@ SCENES = [
         look=entity("minecraft:villager"),
     ),
     scene(
+        "dropped_item",
+        setup=[
+            f"summon minecraft:item -1.5 {Y + 1.2} -2.5 "
+            '{Item:{id:"minecraft:diamond",count:3},PickupDelay:32767s,Age:-32768s,NoGravity:1b}'
+        ],
+        look=point(-2, Y + 0.82, -3),
+    ),
+    scene(
         "armor_stand",
         setup=[
             f"summon minecraft:armor_stand -1.5 {Y + 1} -2.5 "
