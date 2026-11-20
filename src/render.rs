@@ -18,8 +18,8 @@ const BORDER_BOTTOM: u32 = 0x5028_007F;
 
 fn row_height(row: &Row) -> f32 {
     match row {
-        Row::Line(..) | Row::Health(..) => LINE,
-        Row::Items(_) | Row::Progress { .. } => SLOT,
+        Row::Line(..) | Row::Health(..) | Row::Armor(..) => LINE,
+        Row::Items(_) | Row::Progress { .. } | Row::Harvest { .. } => SLOT,
     }
 }
 
@@ -33,8 +33,10 @@ fn row_width(draw: &dyn DrawContext, row: &Row) -> f32 {
                 draw.text_width(&health_text(0.0, *max)) + 2.0
             }
         }
+        Row::Armor(armor) => (armor / 2.0).ceil().min(10.0) * 8.0 + 1.0,
         Row::Items(items) => items.len() as f32 * SLOT,
         Row::Progress { inputs, outputs, .. } => (inputs.len() + outputs.len()) as f32 * SLOT + 26.0,
+        Row::Harvest { tool, .. } => (if tool.is_some() { SLOT } else { 0.0 }) + MARK_W,
     }
 }
 
@@ -53,13 +55,15 @@ pub fn draw(draw: &mut dyn DrawContext, tip: &Tooltip) {
     }
     let content_h = height.max(if tip.icon.is_some() { 16.0 } else { 0.0 });
     let w = (width + icon_w + PAD * 2.0).ceil();
-    let h = (content_h + PAD * 2.0 - 2.0).ceil();
+    // 有破坏进度时底部多留 2px 画进度条。
+    let extra = if tip.breaking.is_some() { BREAK_H } else { 0.0 };
+    let h = (content_h + PAD * 2.0 - 2.0 + extra).ceil();
     let x = ((screen_w - w) / 2.0).floor();
     let y = 4.0;
     background(draw, [x, y, w, h]);
 
     if let Some(icon) = tip.icon {
-        let iy = y + (h - 16.0) / 2.0;
+        let iy = y + (h - extra - 16.0) / 2.0;
         draw.item(icon, [x + PAD, iy.floor()], 16.0);
     }
     let tx = x + PAD + icon_w;
@@ -71,6 +75,25 @@ pub fn draw(draw: &mut dyn DrawContext, tip: &Tooltip) {
         ty += row_height(row);
     }
     draw.text(&tip.mod_name, [tx, ty], MOD_NAME, true);
+    if let Some(progress) = tip.breaking {
+        break_bar(draw, [x, y, w, h], progress);
+    }
+}
+
+/// 破坏进度条的高度。
+const BREAK_H: f32 = 2.0;
+const BREAK_TRACK: u32 = 0xFF55_5555;
+const BREAK_FILL: u32 = 0xFFFF_FFFF;
+
+/// 提示框底部的破坏进度：1px 的槽 + 1px 的已完成部分，左右各留 1px 不压边框。
+fn break_bar(draw: &mut dyn DrawContext, [x, y, w, h]: [f32; 4], progress: f32) {
+    let width = (w - 2.0).max(0.0);
+    let top = y + h - BREAK_H;
+    draw.fill([x + 1.0, top, width, 1.0], BREAK_TRACK);
+    let filled = (width * progress.clamp(0.0, 1.0)).round().min(width);
+    if filled > 0.0 {
+        draw.fill([x + 1.0, top, filled, 1.0], BREAK_FILL);
+    }
 }
 
 /// 原版 tooltip 的背景：深色底加紫色渐变边框。
@@ -88,6 +111,7 @@ fn draw_row(draw: &mut dyn DrawContext, row: &Row, x: f32, y: f32) {
     match row {
         Row::Line(text, color) => draw.text(text, [x, y], *color, true),
         Row::Health(hp, max) => health(draw, *hp, *max, x, y),
+        Row::Armor(armor) => armor_row(draw, *armor, x, y),
         Row::Items(items) => {
             for (i, (item, count)) in items.iter().enumerate() {
                 slot(draw, *item, *count, x + i as f32 * SLOT, y);
@@ -106,6 +130,32 @@ fn draw_row(draw: &mut dyn DrawContext, row: &Row, x: f32, y: f32) {
                 cx += SLOT;
             }
         }
+        Row::Harvest { tool, ok } => harvest(draw, *tool, *ok, x, y),
+    }
+}
+
+const MARK_W: f32 = 9.0;
+
+/// 需要的工具：先画工具图标，再画绿色的✔（能采集）或红色的✘（不能）。
+/// 对勾与叉用像素点自绘，不依赖字体里有没有这些字形。
+fn harvest(draw: &mut dyn DrawContext, tool: Option<mod_api::ItemKey>, ok: bool, x: f32, y: f32) {
+    let mut cx = x;
+    if let Some(item) = tool {
+        draw.item(item, [x + 1.0, y + 1.0], 16.0);
+        cx += SLOT;
+    }
+    mark(draw, ok, cx + 1.0, y + 5.0);}
+
+/// ✔ 的像素：从左上降到底部再升到右上。
+const CHECK: [(i32, i32); 7] = [(0, 3), (1, 4), (2, 5), (3, 4), (4, 3), (5, 2), (6, 1)];
+/// ✘ 的两条对角线。
+const CROSS: [(i32, i32); 12] =
+    [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (5, 0), (4, 1), (3, 2), (2, 3), (1, 4), (0, 5)];
+
+fn mark(draw: &mut dyn DrawContext, ok: bool, x: f32, y: f32) {
+    let (pixels, color) = if ok { (CHECK.as_slice(), 0xFF55_FF55) } else { (CROSS.as_slice(), 0xFFFF_5555) };
+    for (c, r) in pixels {
+        draw.fill([x + *c as f32, y + *r as f32, 1.0, 1.0], color);
     }
 }
 
@@ -155,6 +205,19 @@ fn health(draw: &mut dyn DrawContext, hp: f32, max: f32, x: f32, y: f32) {
             gui_sprite(draw, "hud/heart/full", [0.0, 0.0, 9.0, 9.0], dst, None);
         } else if filled > 0.0 {
             gui_sprite(draw, "hud/heart/half", [0.0, 0.0, 9.0, 9.0], dst, None);
+        }
+    }
+}
+
+/// 盔甲值：满、半图标，每图标 2 点；超过 20 点画满 10 个。
+fn armor_row(draw: &mut dyn DrawContext, armor: f32, x: f32, y: f32) {
+    let icons = (armor / 2.0).ceil().min(10.0) as i32;
+    for i in 0..icons {
+        let full = armor - i as f32 * 2.0 >= 2.0;
+        let path = if full { "hud/armor_full" } else { "hud/armor_half" };
+        if !gui_sprite(draw, path, [0.0, 0.0, 9.0, 9.0], [x + i as f32 * 8.0, y, 9.0, 9.0], None) {
+            draw.text(&format!("🛡 {armor:.0}"), [x, y], 0xFFAA_AAAA, true);
+            return;
         }
     }
 }

@@ -11,6 +11,9 @@ use mod_api::{
 };
 
 mod client;
+mod dropped;
+mod fluid;
+mod harvest;
 #[cfg(test)]
 mod lang_keys_test;
 mod limit;
@@ -58,6 +61,15 @@ impl Hooks for Jade {
         });
         let _ = TO_SERVER.set(to_server);
         let _ = TO_CLIENT.set(to_client);
+    }
+
+    fn client_mining_predict(
+        &self,
+        _host: &dyn ClientHost,
+        event: &mut mod_api::ClientMiningPredictEvent,
+    ) -> mod_api::Flow {
+        client::record_mining(&event.prediction);
+        mod_api::Flow::Continue
     }
 
     fn client_tick_post(&self, host: &mut dyn ClientHost, _event: &mut ClientTickPostEvent) {

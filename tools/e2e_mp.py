@@ -30,16 +30,8 @@ PLAYERS = {"Alice": (0.5, Y + 1, 0.5), "Bob": (3.5, Y + 1, 0.5)}
 E2E = ROOT / "target" / "e2e"
 HMOD = ROOT / "target" / "horizon-mod" / "jade.hmod"
 
-
-def hud_visible(png):
-    """截图顶部中间是否有 Jade 提示框：统计接近其深紫底色（0x100010，不透明度 0xF0）的像素比例。"""
-    from PIL import Image
-    img = Image.open(png).convert("RGB")
-    w, h = img.size
-    region = img.crop((int(w * 0.2), 0, int(w * 0.8), int(h * 0.2)))
-    px = list(region.getdata())
-    dark = sum(1 for r_, g, b in px if r_ < 45 and g < 30 and b < 45 and abs(r_ - b) < 20)
-    return dark / len(px) > 0.03
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hud import hud_visible  # noqa: E402
 
 
 def find_game():
@@ -57,9 +49,9 @@ def find_game():
 
 
 class Run:
-    def __init__(self, out):
+    def __init__(self, out, log_name="e2e.log"):
         self.out = out
-        self.log = open(out / "e2e.log", "w", encoding="utf-8")
+        self.log = open(out / log_name, "w", encoding="utf-8")
 
     def note(self, *parts):
         msg = " ".join(str(p) for p in parts)

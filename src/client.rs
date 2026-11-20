@@ -10,16 +10,20 @@ use mod_api::{BlockState, ClientHost, CrosshairTarget, Identifier, ItemKey};
 use crate::net::{KIND_BLOCK, KIND_ENTITY, NetLine, NetTarget, Request, ServerData};
 
 /// 提示框里的一行。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Row {
     /// 普通文字与颜色。
     Line(String, u32),
     /// 生命值：当前、最大。
     Health(f32, f32),
+    /// 盔甲值：每 2 点一个图标。
+    Armor(f32),
     /// 一排物品图标与数量。
     Items(Vec<(ItemKey, i32)>),
     /// 输入物品 → 进度箭头 → 输出物品。
     Progress { inputs: Vec<(ItemKey, i32)>, outputs: Vec<(ItemKey, i32)>, fraction: f32 },
+    /// 需要的工具与能不能采集：工具图标 + ✔/✘。
+    Harvest { tool: Option<ItemKey>, ok: bool },
 }
 
 /// 当前要画的提示框。
@@ -29,10 +33,16 @@ pub struct Tooltip {
     pub title: String,
     pub rows: Vec<Row>,
     pub mod_name: String,
+    /// 正在挖这个方块时的破坏进度 0..1，画成提示框底部的一条进度条。
+    pub breaking: Option<f32>,
 }
 
 #[derive(Default)]
 struct State {
+    /// 客户端 tick 计数，用来判断挖掘记录是不是最新的。
+    tick: u32,
+    /// 最近一次挖掘预测。
+    mining: Mining,
     target: Option<NetTarget>,
     /// 当前目标收到过的服务端数据。
     server: Option<ServerData>,
@@ -77,13 +87,35 @@ pub fn current() -> Option<Tooltip> {
 /// 换目标时不等这个间隔，立即请求。
 pub const REQUEST_INTERVAL: u32 = 10;
 
+/// 最近一次客户端挖掘预测：正在挖哪个方块、进度多少、记在第几 tick。
+#[derive(Clone, Copy, Debug, Default)]
+struct Mining {
+    pos: Option<[i32; 3]>,
+    progress: f32,
+    tick: u32,
+}
+
+/// 挖掘预测只在这个 tick 数内算“正在挖”；松手后残留的记录会被丢掉。
+const MINING_STALE_TICKS: u32 = 2;
+
+/// 客户端每 tick 的挖掘预测（`client_mining_predict` 钩子调用）。
+pub fn record_mining(prediction: &mod_api::ClientMiningPrediction) {
+    let mut st = lock(state());
+    st.mining = Mining { pos: Some(prediction.pos), progress: prediction.progress, tick: st.tick };
+}
+
 /// 每个客户端 tick 调用：更新目标，返回需要发送的请求。
 pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
-    let target = host.crosshair_target();
+    // 掉落物原版瞄不到，自己做射线；它比准星命中的东西近时，当作准星命中的实体。
+    let dropped = crate::dropped::target(host);
+    let fluid = if dropped.is_some() { None } else { fluid_target(host) };
+    // 显示流体时不向服务端要数据（流体信息全在客户端算）。
+    let target = if fluid.is_some() { None } else { dropped.or_else(|| host.crosshair_target()) };
     let net = target.as_ref().and_then(net_target);
     // 先在锁内更新目标、取出服务端数据，放锁后再读宿主组装提示框。
-    let (server, request) = {
+    let (server, request, mining, tick) = {
         let mut st = lock(state());
+        st.tick += 1;
         let changed = st.target != net;
         if changed {
             st.target = net.clone();
@@ -94,11 +126,65 @@ pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
             st.ticks_since_request = ticks;
             send.then_some(Request { target, fresh: changed })
         });
-        (st.server.clone(), request)
+        (st.server.clone(), request, st.mining, st.tick)
     };
-    let tooltip = target.as_ref().and_then(|t| build(host, t, server.as_ref()));
+    let detail = shift_down(host);
+    let mut tooltip = match &fluid {
+        Some(fluid) => Some(fluid_tooltip(host, fluid)),
+        None => target.as_ref().and_then(|t| build(host, t, server.as_ref(), detail)),
+    };
+    if let Some(tip) = tooltip.as_mut() {
+        tip.breaking = breaking(target_pos(&target), &mining, tick);
+    }
     lock(state()).tooltip = tooltip;
     request
+}
+
+/// 准星命中的方块坐标；对准实体或什么也没有时为 None。
+fn target_pos(target: &Option<CrosshairTarget>) -> Option<[i32; 3]> {
+    match target {
+        Some(CrosshairTarget::Block { pos, .. }) => Some(block_pos(pos)),
+        _ => None,
+    }
+}
+
+/// 正在挖准星对着的方块时给出破坏进度；换目标或松手后（记录过期）就不给了。
+fn breaking(target: Option<[i32; 3]>, mining: &Mining, tick: u32) -> Option<f32> {
+    if target? != mining.pos? {
+        return None;
+    }
+    if tick.saturating_sub(mining.tick) > MINING_STALE_TICKS {
+        return None;
+    }
+    (mining.progress > 0.0 && mining.progress < 1.0).then_some(mining.progress)
+}
+
+/// 视线上的流体；准星命中的实体比流体近时不显示流体。
+fn fluid_target(host: &dyn ClientHost) -> Option<crate::fluid::Fluid> {
+    let fluid = crate::fluid::target(host)?;
+    let closer_entity = match host.crosshair_target() {
+        Some(CrosshairTarget::Entity { point, .. }) => {
+            crate::fluid::eye(host).is_some_and(|eye| crate::fluid::distance(eye, point) <= fluid.distance)
+        }
+        // 方块命中格本身不参与流体判定，能看到的流体一定在它之前。
+        _ => false,
+    };
+    (!closer_entity).then_some(fluid)
+}
+
+fn fluid_tooltip(host: &dyn ClientHost, fluid: &crate::fluid::Fluid) -> Tooltip {
+    let namespace = fluid.id.split(':').next().unwrap_or("minecraft").to_owned();
+    Tooltip {
+        icon: host.fluid_bucket(&fluid.id),
+        title: block_name(host, &fluid.id),
+        rows: Vec::new(),
+        mod_name: mod_name(host, &namespace),
+        breaking: None,
+    }
+}
+
+fn shift_down(host: &dyn ClientHost) -> bool {
+    host.is_key_down("key.keyboard.left.shift") || host.is_key_down("key.keyboard.right.shift")
 }
 
 /// 本 tick 是否发请求，以及更新后的计数：换目标立即发，否则每 [`REQUEST_INTERVAL`] tick 一次。
@@ -130,8 +216,30 @@ fn block_pos(pos: &mod_api::BlockPos) -> [i32; 3] {
 const GRAY: u32 = 0xFFAA_AAAA;
 const RED: u32 = 0xFFFF_5555;
 
-fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&ServerData>) -> Option<Tooltip> {
+/// 蜂巢最多 5 级蜂蜜。
+const HONEY_MAX: u32 = 5;
+
+/// “3 ticks”/“1 tick”，中文两处都是“3刻”。
+fn ticks_text(host: &dyn ClientHost, ticks: u32) -> String {
+    let key = if ticks == 1 { "jade.horizon.tick" } else { "jade.horizon.ticks" };
+    tr(host, key, &[ticks.to_string()])
+}
+
+/// 精简模式下隐藏的服务端行键；按住 Shift 才显示。
+const DETAIL_KEYS: &[&str] = &[
+    "jade.mobgrowth.time",
+    "jade.mobbreeding.time",
+    "jade.mobbreeding.fed",
+    "jade.nextEgg",
+    "jade.owner",
+];
+
+const COMPACT_ITEM_ROWS: usize = 1;
+const DETAIL_ITEM_ROWS: usize = 6;
+
+fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&ServerData>, detail: bool) -> Option<Tooltip> {
     let mut tip = Tooltip::default();
+    let mut rows: Vec<(Row, Option<&str>)> = Vec::new();
     let namespace;
     match target {
         CrosshairTarget::Block { state, .. } => {
@@ -144,7 +252,12 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
             tip.icon = host.block_item(block).filter(|item| item.id(host) != "minecraft:air");
             tip.title = block_name(host, &id);
             let props = properties(host, *state);
-            block_rows(host, &id, &props, &mut tip.rows);
+            let mut plain = Vec::new();
+            if let Some(harvest) = crate::harvest::of(host, *state) {
+                plain.push(Row::Harvest { tool: harvest.tool, ok: harvest.ok });
+            }
+            block_rows(host, &id, &props, &mut plain);
+            rows.extend(plain.into_iter().map(|r| (r, None)));
         }
         CrosshairTarget::Entity { entity, .. } => {
             let kind = entity.kind(host).map(|k| k.id(host)).unwrap_or_default();
@@ -152,17 +265,47 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
             tip.title = entity.name(host).unwrap_or_else(|| translated(host, &key_of("entity", &kind)));
             if let Some(living) = host.living(*entity) {
                 if let (Some(hp), Some(max)) = (living.health(host), living.max_health(host)) {
-                    tip.rows.push(Row::Health(hp, max));
+                    rows.push((Row::Health(hp, max), None));
                 }
             }
         }
         _ => return None,
     }
     if let Some(data) = server {
-        server_rows(host, data, &mut tip.rows);
+        server_rows(host, data, &mut rows);
     }
+    let (mut visible, hidden) = visible_rows(rows, detail);
+    if hidden {
+        visible.push(Row::Line(tr(host, "jade.horizon.shift_for_more", &[]), GRAY));
+    }
+    tip.rows = visible;
     tip.mod_name = mod_name(host, &namespace);
     Some(tip)
+}
+
+/// 按精简/详细模式过滤行，返回 `(显示的行, 是否有内容被精简模式隐藏)`。
+fn visible_rows(rows: Vec<(Row, Option<&str>)>, detail: bool) -> (Vec<Row>, bool) {
+    let item_limit = if detail { DETAIL_ITEM_ROWS } else { COMPACT_ITEM_ROWS };
+    let mut item_rows = 0;
+    let mut out = Vec::with_capacity(rows.len());
+    let mut hidden = false;
+    for (row, key) in rows {
+        if matches!(row, Row::Items(_)) {
+            item_rows += 1;
+            if item_rows > item_limit {
+                if !detail && item_rows <= DETAIL_ITEM_ROWS {
+                    hidden = true;
+                }
+                continue;
+            }
+        }
+        if !detail && key.is_some_and(|k| DETAIL_KEYS.contains(&k)) {
+            hidden = true;
+            continue;
+        }
+        out.push(row);
+    }
+    (out, hidden)
 }
 
 /// `minecraft:wheat[age=7]` 的属性表。
@@ -199,7 +342,8 @@ fn block_rows(host: &dyn ClientHost, id: &str, props: &HashMap<String, String>, 
         "repeater" => {
             if let Some(d) = prop("delay") {
                 let ticks = d.parse::<u32>().unwrap_or(1);
-                rows.push(Row::Line(tr(host, "tooltip.jade.delay", &[format!("{ticks} tick")]), GRAY));
+                let text = ticks_text(host, ticks);
+                rows.push(Row::Line(tr(host, "tooltip.jade.delay", &[text]), GRAY));
             }
         }
         "comparator" => {
@@ -217,13 +361,16 @@ fn block_rows(host: &dyn ClientHost, id: &str, props: &HashMap<String, String>, 
         }
         "beehive" | "bee_nest" => {
             if let Some(h) = prop("honey_level") {
-                rows.push(Row::Line(tr(host, "jade.beehive.honey", &[format!("{h} / 5")]), GRAY));
+                let amount = tr(host, "jade.fraction", &[h.to_owned(), HONEY_MAX.to_string()]);
+                rows.push(Row::Line(tr(host, "jade.beehive.honey", &[amount]), GRAY));
             }
         }
         "note_block" => {
             if let (Some(note), Some(inst)) = (prop("note"), prop("instrument")) {
                 let inst = tr(host, &format!("jade.instrument.{inst}"), &[]);
-                rows.push(Row::Line(format!("{inst} ({})", note_name(note.parse().unwrap_or(0))), GRAY));
+                let note = note_name(note.parse().unwrap_or(0)).to_owned();
+                let text = tr(host, "jade.horizon.note_block", &[inst, note]);
+                rows.push(Row::Line(text, GRAY));
             }
         }
         "tnt" => {
@@ -256,25 +403,29 @@ fn note_name(note: u32) -> &'static str {
     NAMES[(note % 12) as usize]
 }
 
-fn server_rows(host: &dyn ClientHost, data: &ServerData, rows: &mut Vec<Row>) {
+fn server_rows<'a>(host: &dyn ClientHost, data: &'a ServerData, rows: &mut Vec<(Row, Option<&'a str>)>) {
     // 客户端读不到生物生命值时（Horizon 客户端未同步部分生物），用服务端的值，放在标题下第一行。
-    if data.max_health > 0.0 && !rows.iter().any(|r| matches!(r, Row::Health(..))) {
-        rows.insert(0, Row::Health(data.health, data.max_health));
+    if data.max_health > 0.0 && !rows.iter().any(|(r, _)| matches!(r, Row::Health(..))) {
+        rows.insert(0, (Row::Health(data.health, data.max_health), None));
+    }
+    if data.armor > 0.0 {
+        let at = rows.iter().position(|(r, _)| matches!(r, Row::Health(..))).map_or(0, |i| i + 1);
+        rows.insert(at, (Row::Armor(data.armor), None));
     }
     for p in &data.progress {
         let items = |v: &[crate::net::NetItem]| v.iter().filter_map(|i| Some((item_key(host, &i.id)?, i.count))).collect();
         let fraction = if p.total > 0 { (p.current as f32 / p.total as f32).clamp(0.0, 1.0) } else { 0.0 };
-        rows.push(Row::Progress { inputs: items(&p.inputs), outputs: items(&p.outputs), fraction });
+        rows.push((Row::Progress { inputs: items(&p.inputs), outputs: items(&p.outputs), fraction }, None));
     }
     if !data.items.is_empty() {
         let items: Vec<_> = data.items.iter().filter_map(|i| Some((item_key(host, &i.id)?, i.count))).collect();
-        // 每行最多 9 个，与 Jade 默认的容器显示一致。
-        for chunk in items.chunks(9).take(6) {
-            rows.push(Row::Items(chunk.to_vec()));
+        // 每行最多 9 个，与 Jade 默认的容器显示一致；显示几行由 visible_rows 决定。
+        for chunk in items.chunks(9) {
+            rows.push((Row::Items(chunk.to_vec()), None));
         }
     }
     for line in &data.lines {
-        rows.push(Row::Line(net_line(host, line), GRAY));
+        rows.push((Row::Line(net_line(host, line), GRAY), Some(line.key.as_str())));
     }
 }
 
@@ -288,8 +439,9 @@ fn net_line(host: &dyn ClientHost, line: &NetLine) -> String {
 }
 
 fn arg(host: &dyn ClientHost, a: &str) -> String {
-    if let Some(key) = a.strip_prefix('@') {
-        translated(host, key)
+    if a.starts_with('@') {
+        // 一个参数可由空格连接多段：`@effect.x.speed @enchantment.level.2`；以 `@` 开头的段翻译，其余原样。
+        a.split(' ').map(|part| part.strip_prefix('@').map_or_else(|| part.to_owned(), |key| translated(host, key))).collect::<Vec<_>>().join(" ")
     } else if let Some(t) = a.strip_prefix("#ticks:") {
         duration(host, t.parse().unwrap_or(0))
     } else {
@@ -421,11 +573,73 @@ mod tests {
     }
 
     #[test]
+    fn breaking_follows_the_crosshair_and_fresh_predictions() {
+        let mining = Mining { pos: Some([0, 150, 3]), progress: 0.4, tick: 10 };
+        assert_eq!(breaking(Some([0, 150, 3]), &mining, 10), Some(0.4));
+        // 记录两 tick 内仍算在挖。
+        assert_eq!(breaking(Some([0, 150, 3]), &mining, 12), Some(0.4));
+        // 过期（松手后）就不显示了。
+        assert_eq!(breaking(Some([0, 150, 3]), &mining, 13), None);
+        // 准星换到别的方块也不显示。
+        assert_eq!(breaking(Some([0, 150, 4]), &mining, 10), None);
+        // 没对准任何东西同理。
+        assert_eq!(breaking(None, &mining, 10), None);
+    }
+
+    #[test]
+    fn breaking_hides_zero_and_complete() {
+        for progress in [0.0, 1.0] {
+            let mining = Mining { pos: Some([0, 150, 3]), progress, tick: 10 };
+            assert_eq!(breaking(Some([0, 150, 3]), &mining, 10), None, "progress={progress}");
+        }
+        let mining = Mining { pos: Some([0, 150, 3]), progress: 0.99, tick: 10 };
+        assert_eq!(breaking(Some([0, 150, 3]), &mining, 10), Some(0.99));
+    }
+
+    #[test]
     fn formats_java_style() {
         let args = vec!["a".to_owned(), "b".to_owned()];
         assert_eq!(format_args_java("%s / %s", &args), "a / b");
         assert_eq!(format_args_java("%2$s-%1$s", &args), "b-a");
         assert_eq!(format_args_java("100%%", &[]), "100%");
         assert_eq!(format_args_java("§oWhat?", &[]), "What?");
+    }
+
+    #[test]
+    fn compact_limits_item_rows_to_one() {
+        let one = vec![(Row::Items(vec![]), None)];
+        assert_eq!(visible_rows(one.clone(), false), (vec![Row::Items(vec![])], false));
+        assert_eq!(visible_rows(one, true), (vec![Row::Items(vec![])], false));
+
+        let seven: Vec<_> = (0..7).map(|_| (Row::Items(vec![]), None)).collect();
+        let (compact, hidden) = visible_rows(seven.clone(), false);
+        assert_eq!(compact.len(), 1);
+        assert!(hidden);
+
+        let (detail, hidden) = visible_rows(seven, true);
+        assert_eq!(detail.len(), 6);
+        assert!(!hidden);
+    }
+
+    #[test]
+    fn compact_hides_detail_keys_only() {
+        let rows = vec![
+            (Row::Health(10.0, 10.0), None),
+            (Row::Line("Bees: 3".into(), GRAY), Some("jade.beehive.bees")),
+            (Row::Line("Growing time: 10m".into(), GRAY), Some("jade.mobgrowth.time")),
+            (Row::Line("Breeding CD: 2m".into(), GRAY), Some("jade.mobbreeding.time")),
+            (Row::Line("Breeding CD: In Love".into(), GRAY), Some("jade.mobbreeding.fed")),
+            (Row::Line("Next egg: 5m".into(), GRAY), Some("jade.nextEgg")),
+        ];
+        let (compact, hidden) = visible_rows(rows.clone(), false);
+        assert_eq!(
+            compact,
+            vec![Row::Health(10.0, 10.0), Row::Line("Bees: 3".into(), GRAY)]
+        );
+        assert!(hidden);
+
+        let (detail, hidden) = visible_rows(rows, true);
+        assert_eq!(detail.len(), 6);
+        assert!(!hidden);
     }
 }

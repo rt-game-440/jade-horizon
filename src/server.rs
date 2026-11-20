@@ -64,6 +64,10 @@ pub fn collect(host: &mut dyn ServerHost, player: PlayerRef, target: &NetTarget)
                     data.health = hp;
                     data.max_health = max;
                 }
+                living_lines(host, entity, living, &kind, &mut data);
+            }
+            if let Some(item) = host.item_entity(entity).and_then(|e| e.stack(&*host)) {
+                data.items.push(NetItem { id: item.item().id(&*host), count: item.count().min(i32::MAX as u32) as i32 });
             }
             let nbt = entity.nbt(host).unwrap_or_default();
             entity_data(&kind, &nbt, &mut data);
@@ -194,7 +198,9 @@ fn storage_items(host: &mut dyn ServerHost, level: mod_api::LevelRef, pos: [i32;
 
 fn entity_data(kind: &str, nbt: &Compound, data: &mut ServerData) {
     // 幼年生物的成长时间，成年动物的繁殖冷却（Age 字段，单位 tick）。
-    if let Some(age) = cget(nbt, "Age").and_then(tag_int) {
+    // 掉落物的 Age 是存在时间，不是成长/繁殖冷却。
+    let aged = kind != "minecraft:item";
+    if let Some(age) = cget(nbt, "Age").and_then(tag_int).filter(|_| aged) {
         if age < 0 {
             data.lines.push(line("jade.mobgrowth.time", [ticks_text(-age)]));
         } else if age > 0 {
@@ -215,9 +221,100 @@ fn entity_data(kind: &str, nbt: &Compound, data: &mut ServerData) {
                 data.items.push(item);
             }
         }
+        "minecraft:painting" => {
+            if let Some(variant) = cget(nbt, "variant").and_then(tag_str) {
+                data.lines.push(line("jade.horizon.painting", [format!("@{}", painting_key(&variant))]));
+            }
+        }
         _ => {}
     }
-    // 驯服生物的主人：只给出 UUID 是否存在，名字由客户端显示不了，Jade 也只在服务端解析名字。
+}
+
+/// 生物专属信息：盔甲值、药水效果、马类属性、村民职业、主人、盔甲架装备。
+fn living_lines(host: &mut dyn ServerHost, entity: mod_api::EntityRef, living: mod_api::LivingRef, kind: &str, data: &mut ServerData) {
+    data.armor = living.attribute_value(&*host, "minecraft:armor").unwrap_or(0.0) as f32;
+    for effect in living.effects(&*host).unwrap_or_default() {
+        data.lines.push(potion_line(&effect.id.id(&*host), effect.amplifier, effect.duration));
+    }
+    if HORSES.contains(&kind) {
+        let speed = living.attribute_value(&*host, "minecraft:movement_speed");
+        let jump = living.attribute_value(&*host, "minecraft:jump_strength");
+        if let Some(jump) = jump {
+            data.lines.push(line("jade.horseStat.jump", [format!("{:.2}", horse_jump_blocks(jump))]));
+        }
+        if let Some(speed) = speed {
+            data.lines.push(line("jade.horseStat.speed", [format!("{:.2}", horse_speed_blocks(speed))]));
+        }
+    }
+    if let Some(merchant) = host.merchant(entity) {
+        let profession = merchant.profession(&*host);
+        let level = merchant.level(&*host);
+        if let Some(arg) = profession.as_deref().and_then(|p| profession_arg(p, level)) {
+            data.lines.push(line("tooltip.jade.villager_profession", [arg]));
+        }
+    }
+    if let Some(owner) = living.owner(&*host) {
+        let name = host.player(owner).and_then(|p| p.name(&*host)).unwrap_or_else(|| short_uuid(owner));
+        data.lines.push(line("jade.owner", [name]));
+    }
+    if kind == "minecraft:armor_stand" {
+        let items = mod_api::EquipmentSlot::ALL
+            .into_iter()
+            .filter_map(|slot| living.equipment(&*host, slot))
+            .map(|stack| NetItem { id: stack.item().id(&*host), count: stack.count().min(i32::MAX as u32) as i32 })
+            .collect();
+        data.items.extend(merge(items));
+    }
+}
+
+/// 有速度与跳跃力属性、值得显示的坐骑。
+const HORSES: &[&str] = &["minecraft:horse", "minecraft:donkey", "minecraft:mule", "minecraft:skeleton_horse", "minecraft:zombie_horse"];
+
+/// 移动速度属性 → 格/秒。
+pub fn horse_speed_blocks(attribute: f64) -> f64 {
+    attribute * 42.16
+}
+
+/// 跳跃力属性 → 跳跃高度（格），Jade 用的拟合公式。
+pub fn horse_jump_blocks(strength: f64) -> f64 {
+    -0.1817584952 * strength.powi(3) + 3.689713992 * strength.powi(2) + 2.128599134 * strength - 0.343930367
+}
+
+/// 药水效果一行：`jade.potion` = `名称 等级` + 剩余时间；等级 1 不写；无限时长写"无限"。
+pub fn potion_line(id: &str, amplifier: i32, duration: i32) -> NetLine {
+    let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
+    let name = if amplifier <= 0 {
+        format!("@effect.{ns}.{path}")
+    } else if amplifier < 9 {
+        format!("@effect.{ns}.{path} @enchantment.level.{}", amplifier + 1)
+    } else {
+        format!("@effect.{ns}.{path} {}", amplifier + 1)
+    };
+    let time = if duration < 0 { "@effect.duration.infinite".to_owned() } else { ticks_text(duration) };
+    line("jade.potion", [name, time])
+}
+
+/// 村民职业与等级：`entity.minecraft.villager.<职业> merchant.level.<等级>`。没有职业或无等级信息时按有的显示。
+pub fn profession_arg(profession: &str, level: Option<i32>) -> Option<String> {
+    let (ns, path) = profession.split_once(':').unwrap_or(("minecraft", profession));
+    if path == "none" {
+        return None;
+    }
+    let mut out = format!("@entity.{ns}.villager.{path}");
+    if let Some(level) = level.filter(|l| (1..=5).contains(l)) {
+        out.push_str(&format!(" @merchant.level.{level}"));
+    }
+    Some(out)
+}
+
+/// 画的翻译键由游戏提供：`painting.<ns>.<path>.title`。
+pub fn painting_key(variant: &str) -> String {
+    let (ns, path) = variant.split_once(':').unwrap_or(("minecraft", variant));
+    format!("painting.{ns}.{path}.title")
+}
+
+fn short_uuid(uuid: u128) -> String {
+    format!("{:08x}", (uuid >> 96) as u32)
 }
 
 // ---- NBT 小工具 ----
@@ -333,4 +430,38 @@ fn line<const N: usize>(key: &str, args: [String; N]) -> NetLine {
 /// tick 转成 Jade 的时间文本参数，客户端按 `jade.seconds` 等键格式化。
 fn ticks_text(ticks: i32) -> String {
     format!("#ticks:{ticks}")
+}
+
+#[cfg(test)]
+mod living_tests {
+    use super::*;
+
+    #[test]
+    fn potion_line_formats_level_and_time() {
+        assert_eq!(potion_line("minecraft:speed", 0, 600).args, ["@effect.minecraft.speed", "#ticks:600"]);
+        assert_eq!(potion_line("minecraft:speed", 1, 600).args[0], "@effect.minecraft.speed @enchantment.level.2");
+        assert_eq!(potion_line("minecraft:strength", 11, -1).args, ["@effect.minecraft.strength 12", "@effect.duration.infinite"]);
+        assert_eq!(potion_line("mod:x", 0, 20).args[0], "@effect.mod.x");
+    }
+
+    #[test]
+    fn horse_stats_convert_like_jade() {
+        assert!((horse_speed_blocks(0.225) - 9.486).abs() < 1e-3);
+        // 跳跃力 0.7 约 2.9 格，1.0（上限）约 5.3 格。
+        assert!((horse_jump_blocks(0.7) - 2.89).abs() < 0.02);
+        assert!((horse_jump_blocks(1.0) - 5.29).abs() < 0.02);
+    }
+
+    #[test]
+    fn profession_hides_none_and_bad_levels() {
+        assert_eq!(profession_arg("minecraft:none", Some(1)), None);
+        assert_eq!(profession_arg("minecraft:librarian", Some(2)).unwrap(), "@entity.minecraft.villager.librarian @merchant.level.2");
+        assert_eq!(profession_arg("minecraft:farmer", None).unwrap(), "@entity.minecraft.villager.farmer");
+    }
+
+    #[test]
+    fn painting_and_uuid_keys() {
+        assert_eq!(painting_key("minecraft:kebab"), "painting.minecraft.kebab.title");
+        assert_eq!(short_uuid(0xdeadbeef_u128 << 96), "deadbeef");
+    }
 }
