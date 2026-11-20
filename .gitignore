@@ -1,0 +1,5 @@
+/target
+/.horizon
+/logs
+/mod.wasm
+__pycache__/

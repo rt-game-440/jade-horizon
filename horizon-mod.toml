@@ -1,0 +1,16 @@
+id = "jade"
+name = "Jade for Horizon"
+version = "0.1.0"
+description = "Shows information about what you are looking at. An unofficial Rust port of Snownee's Jade to Horizon."
+authors = ["Snownee (original Jade)", "jade-horizon contributors"]
+license = "CC-BY-NC-SA-4.0"
+license_url = "https://creativecommons.org/licenses/by-nc-sa/4.0/"
+credits = "Based on Jade by Snownee (https://github.com/Snownee/Jade), licensed CC BY-NC-SA 4.0. Translations from the Jade project and its translators."
+# A wasm mod: Rust in src/, built to mod.wasm by `cargo horizon-mod build --wasm` against the SDK build Cargo.toml pins, beside data/ and assets/.
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[wasm]
+sha512 = "70647adc7fc23623f9dec047633b812e0b06bca736a585065d149b7814baf6951308d9e59f261dd80c40c7dfe69d8194ef47eaab2c05a4e46b509c0e09c7cb15"
+toolchain = "1.99.1 58cf8f9c35b355199727627d07ae34a4e2846d67"

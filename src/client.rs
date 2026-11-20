@@ -1,0 +1,408 @@
+//! 客户端：每 tick 根据准星目标组装提示框内容，并按需向服务端请求数据。
+//!
+//! 对应 Jade 的 CorePlugin（ObjectName、ModName）以及纯客户端的 VanillaPlugin provider：
+//! EntityHealthAndArmor、CropProgress、Redstone、NoteBlock、Beehive 蜂蜜等级、TNT 等。
+use std::collections::HashMap;
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+use mod_api::{BlockState, ClientHost, CrosshairTarget, Identifier, ItemKey};
+
+use crate::net::{KIND_BLOCK, KIND_ENTITY, NetLine, NetTarget, ServerData};
+
+/// 提示框里的一行。
+#[derive(Clone, Debug)]
+pub enum Row {
+    /// 普通文字与颜色。
+    Line(String, u32),
+    /// 生命值：当前、最大。
+    Health(f32, f32),
+    /// 一排物品图标与数量。
+    Items(Vec<(ItemKey, i32)>),
+    /// 输入物品 → 进度箭头 → 输出物品。
+    Progress { inputs: Vec<(ItemKey, i32)>, outputs: Vec<(ItemKey, i32)>, fraction: f32 },
+}
+
+/// 当前要画的提示框。
+#[derive(Clone, Debug, Default)]
+pub struct Tooltip {
+    pub icon: Option<ItemKey>,
+    pub title: String,
+    pub rows: Vec<Row>,
+    pub mod_name: String,
+}
+
+#[derive(Default)]
+struct State {
+    target: Option<NetTarget>,
+    /// 当前目标收到过的服务端数据。
+    server: Option<ServerData>,
+    ticks_since_request: u32,
+    tooltip: Option<Tooltip>,
+}
+
+fn state() -> &'static Mutex<State> {
+    static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+    STATE.get_or_init(Default::default)
+}
+
+/// 取锁；锁中毒（之前持锁时 panic）也继续用里面的数据，避免网络 handler 因此 panic 断线。
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 命名空间 → 模组显示名，注册时由 `lib.rs` 填入。
+pub fn mod_names() -> &'static Mutex<HashMap<String, String>> {
+    static NAMES: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    NAMES.get_or_init(Default::default)
+}
+
+pub fn set_mod_name(namespace: &str, name: &str) {
+    lock(mod_names()).entry(namespace.to_owned()).or_insert_with(|| name.to_owned());
+}
+
+/// 服务端数据到达。
+pub fn receive(data: ServerData) {
+    let mut st = lock(state());
+    if st.target.as_ref() == Some(&data.target) {
+        st.server = Some(data);
+    }
+}
+
+/// 给渲染用的当前提示框。
+pub fn current() -> Option<Tooltip> {
+    lock(state()).tooltip.clone()
+}
+
+/// 每隔多少 tick 重新请求一次服务端数据（进度条需要刷新）。
+const REQUEST_INTERVAL: u32 = 5;
+
+/// 每个客户端 tick 调用：更新目标，返回需要发送的请求。
+pub fn tick(host: &mut dyn ClientHost) -> Option<NetTarget> {
+    let target = host.crosshair_target();
+    let net = target.as_ref().and_then(net_target);
+    // 先在锁内更新目标、取出服务端数据，放锁后再读宿主组装提示框。
+    let (server, request) = {
+        let mut st = lock(state());
+        if st.target != net {
+            st.target = net.clone();
+            st.server = None;
+            st.ticks_since_request = REQUEST_INTERVAL;
+        }
+        let mut request = None;
+        if let Some(net) = &net {
+            st.ticks_since_request += 1;
+            if st.ticks_since_request >= REQUEST_INTERVAL {
+                st.ticks_since_request = 0;
+                request = Some(net.clone());
+            }
+        }
+        (st.server.clone(), request)
+    };
+    let tooltip = target.as_ref().and_then(|t| build(host, t, server.as_ref()));
+    lock(state()).tooltip = tooltip;
+    request
+}
+
+fn net_target(target: &CrosshairTarget) -> Option<NetTarget> {
+    Some(match target {
+        CrosshairTarget::Block { pos, .. } => {
+            let [x, y, z] = block_pos(pos);
+            NetTarget { kind: KIND_BLOCK, x, y, z, entity: 0 }
+        }
+        CrosshairTarget::Entity { entity, .. } => {
+            NetTarget { kind: KIND_ENTITY, entity: entity.id() as i32, ..Default::default() }
+        }
+        _ => return None,
+    })
+}
+
+fn block_pos(pos: &mod_api::BlockPos) -> [i32; 3] {
+    [pos.x, pos.y, pos.z]
+}
+
+const GRAY: u32 = 0xFFAA_AAAA;
+const RED: u32 = 0xFFFF_5555;
+
+fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&ServerData>) -> Option<Tooltip> {
+    let mut tip = Tooltip::default();
+    let namespace;
+    match target {
+        CrosshairTarget::Block { state, .. } => {
+            let block = state.block();
+            let id = block.id(host);
+            if id == "minecraft:air" {
+                return None;
+            }
+            namespace = id.split(':').next().unwrap_or("minecraft").to_owned();
+            tip.icon = host.block_item(block).filter(|item| item.id(host) != "minecraft:air");
+            tip.title = block_name(host, &id);
+            let props = properties(host, *state);
+            block_rows(host, &id, &props, &mut tip.rows);
+        }
+        CrosshairTarget::Entity { entity, .. } => {
+            let kind = entity.kind(host).map(|k| k.id(host)).unwrap_or_default();
+            namespace = kind.split(':').next().unwrap_or("minecraft").to_owned();
+            tip.title = entity.name(host).unwrap_or_else(|| translated(host, &key_of("entity", &kind)));
+            if let Some(living) = host.living(*entity) {
+                if let (Some(hp), Some(max)) = (living.health(host), living.max_health(host)) {
+                    tip.rows.push(Row::Health(hp, max));
+                }
+            }
+        }
+        _ => return None,
+    }
+    if let Some(data) = server {
+        server_rows(host, data, &mut tip.rows);
+    }
+    tip.mod_name = mod_name(host, &namespace);
+    Some(tip)
+}
+
+/// `minecraft:wheat[age=7]` 的属性表。
+fn properties(host: &dyn ClientHost, state: BlockState) -> HashMap<String, String> {
+    let text = host.block_state_string(state).unwrap_or_default();
+    let mut out = HashMap::new();
+    if let Some(start) = text.find('[') {
+        for pair in text[start + 1..text.len().saturating_sub(1)].split(',') {
+            if let Some((k, v)) = pair.split_once('=') {
+                out.insert(k.to_owned(), v.to_owned());
+            }
+        }
+    }
+    out
+}
+
+fn block_rows(host: &dyn ClientHost, id: &str, props: &HashMap<String, String>, rows: &mut Vec<Row>) {
+    let prop = |k: &str| props.get(k).map(String::as_str);
+    let path = id.split(':').nth(1).unwrap_or(id);
+    // 作物生长（CropProgressProvider）。
+    if let Some(age) = prop("age").and_then(|v| v.parse::<u32>().ok()) {
+        if let Some(max) = crop_max_age(path) {
+            let text = if age >= max {
+                tr(host, "tooltip.jade.crop_mature", &[])
+            } else {
+                let pct = format!("{:.0}%", age as f32 * 100.0 / max as f32);
+                tr(host, "tooltip.jade.crop_growth", &[pct])
+            };
+            rows.push(Row::Line(text, GRAY));
+        }
+    }
+    // 红石（RedstoneProvider）。
+    match path {
+        "repeater" => {
+            if let Some(d) = prop("delay") {
+                let ticks = d.parse::<u32>().unwrap_or(1);
+                rows.push(Row::Line(tr(host, "tooltip.jade.delay", &[format!("{ticks} tick")]), GRAY));
+            }
+        }
+        "comparator" => {
+            if let Some(m) = prop("mode") {
+                let key = if m == "subtract" { "tooltip.jade.mode_subtractor" } else { "tooltip.jade.mode_comparator" };
+                let mode = tr(host, key, &[]);
+                rows.push(Row::Line(tr(host, "tooltip.jade.mode", &[mode]), GRAY));
+            }
+        }
+        "lever" => {
+            if let Some(p) = prop("powered") {
+                let on = tr(host, if p == "true" { "tooltip.jade.state_on" } else { "tooltip.jade.state_off" }, &[]);
+                rows.push(Row::Line(tr(host, "tooltip.jade.state", &[on]), GRAY));
+            }
+        }
+        "beehive" | "bee_nest" => {
+            if let Some(h) = prop("honey_level") {
+                rows.push(Row::Line(tr(host, "jade.beehive.honey", &[format!("{h} / 5")]), GRAY));
+            }
+        }
+        "note_block" => {
+            if let (Some(note), Some(inst)) = (prop("note"), prop("instrument")) {
+                let inst = tr(host, &format!("jade.instrument.{inst}"), &[]);
+                rows.push(Row::Line(format!("{inst} ({})", note_name(note.parse().unwrap_or(0))), GRAY));
+            }
+        }
+        "tnt" => {
+            if prop("unstable") == Some("true") {
+                rows.push(Row::Line(tr(host, "jade.tnt.unstable", &[]), RED));
+            }
+        }
+        _ => {}
+    }
+    if let Some(power) = prop("power") {
+        if power != "0" {
+            rows.push(Row::Line(tr(host, "tooltip.jade.power", &[power.to_owned()]), GRAY));
+        }
+    }
+}
+
+fn crop_max_age(path: &str) -> Option<u32> {
+    Some(match path {
+        "wheat" | "carrots" | "potatoes" | "pumpkin_stem" | "melon_stem" => 7,
+        "beetroots" | "nether_wart" | "sweet_berry_bush" => 3,
+        "cocoa" => 2,
+        "torchflower_crop" => 1,
+        "pitcher_crop" => 4,
+        _ => return None,
+    })
+}
+
+fn note_name(note: u32) -> &'static str {
+    const NAMES: [&str; 12] = ["F♯", "G", "G♯", "A", "A♯", "B", "C", "C♯", "D", "D♯", "E", "F"];
+    NAMES[(note % 12) as usize]
+}
+
+fn server_rows(host: &dyn ClientHost, data: &ServerData, rows: &mut Vec<Row>) {
+    // 客户端读不到生物生命值时（Horizon 客户端未同步部分生物），用服务端的值，放在标题下第一行。
+    if data.max_health > 0.0 && !rows.iter().any(|r| matches!(r, Row::Health(..))) {
+        rows.insert(0, Row::Health(data.health, data.max_health));
+    }
+    for p in &data.progress {
+        let items = |v: &[crate::net::NetItem]| v.iter().filter_map(|i| Some((item_key(host, &i.id)?, i.count))).collect();
+        let fraction = if p.total > 0 { (p.current as f32 / p.total as f32).clamp(0.0, 1.0) } else { 0.0 };
+        rows.push(Row::Progress { inputs: items(&p.inputs), outputs: items(&p.outputs), fraction });
+    }
+    if !data.items.is_empty() {
+        let items: Vec<_> = data.items.iter().filter_map(|i| Some((item_key(host, &i.id)?, i.count))).collect();
+        // 每行最多 9 个，与 Jade 默认的容器显示一致。
+        for chunk in items.chunks(9).take(6) {
+            rows.push(Row::Items(chunk.to_vec()));
+        }
+    }
+    for line in &data.lines {
+        rows.push(Row::Line(net_line(host, line), GRAY));
+    }
+}
+
+fn item_key(host: &dyn ClientHost, id: &str) -> Option<ItemKey> {
+    host.item_key(&Identifier::parse_namespaced(id)?)
+}
+
+fn net_line(host: &dyn ClientHost, line: &NetLine) -> String {
+    let args: Vec<String> = line.args.iter().map(|a| arg(host, a)).collect();
+    tr(host, &line.key, &args)
+}
+
+fn arg(host: &dyn ClientHost, a: &str) -> String {
+    if let Some(key) = a.strip_prefix('@') {
+        translated(host, key)
+    } else if let Some(t) = a.strip_prefix("#ticks:") {
+        duration(host, t.parse().unwrap_or(0))
+    } else {
+        a.to_owned()
+    }
+}
+
+/// Jade 的时间格式：`jade.seconds` / `jade.minutes_seconds` / `jade.hours_minutes`。
+fn duration(host: &dyn ClientHost, ticks: i32) -> String {
+    let secs = ticks.max(0) / 20;
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    let (key, a, b) = if h > 0 {
+        ("jade.hours_minutes", h, m)
+    } else if m > 0 {
+        if s > 0 { ("jade.minutes_seconds", m, s) } else { ("jade.minutes", m, 0) }
+    } else {
+        ("jade.seconds", s, 0)
+    };
+    translated(host, key).replace("{0}", &a.to_string()).replace("{1}", &b.to_string())
+}
+
+fn block_name(host: &dyn ClientHost, id: &str) -> String {
+    let key = key_of("block", id);
+    match host.translate(&key) {
+        Some(name) => name,
+        None => host.translate(&key_of("item", id)).unwrap_or_else(|| id.to_owned()),
+    }
+}
+
+fn key_of(kind: &str, id: &str) -> String {
+    let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
+    format!("{kind}.{ns}.{}", path.replace('/', "."))
+}
+
+fn mod_name(host: &dyn ClientHost, namespace: &str) -> String {
+    if namespace == "minecraft" {
+        return "Minecraft".to_owned();
+    }
+    if let Some(name) = lock(mod_names()).get(namespace) {
+        return name.clone();
+    }
+    let _ = host;
+    // 找不到时把 `my_mod` 变成 `My Mod`。
+    namespace
+        .split('_')
+        .map(|w| {
+            let mut c = w.chars();
+            c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn translated(host: &dyn ClientHost, key: &str) -> String {
+    host.translate(key).unwrap_or_else(|| key.to_owned())
+}
+
+/// 翻译并依次替换 `%s`（也支持 `%1$s` 形式）。
+pub fn tr(host: &dyn ClientHost, key: &str, args: &[String]) -> String {
+    format_args_java(&translated(host, key), args)
+}
+
+pub fn format_args_java(pattern: &str, args: &[String]) -> String {
+    let mut out = String::new();
+    let mut next = 0;
+    let mut rest = pattern;
+    while let Some(i) = rest.find('%') {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i + 1..];
+        if let Some(t) = tail.strip_prefix('s') {
+            out.push_str(args.get(next).map(String::as_str).unwrap_or(""));
+            next += 1;
+            rest = t;
+        } else if let Some(t) = tail.strip_prefix('%') {
+            out.push('%');
+            rest = t;
+        } else if let Some((n, t)) = tail.split_once("$s") {
+            match n.parse::<usize>() {
+                Ok(n) => {
+                    out.push_str(args.get(n.wrapping_sub(1)).map(String::as_str).unwrap_or(""));
+                    rest = t;
+                }
+                Err(_) => {
+                    out.push('%');
+                    rest = tail;
+                }
+            }
+        } else {
+            out.push('%');
+            rest = tail;
+        }
+    }
+    out.push_str(rest);
+    // 去掉 Minecraft 的 § 格式码，DrawContext::text 画的是纯文本。
+    strip_formatting(&out)
+}
+
+fn strip_formatting(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '§' {
+            chars.next();
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_java_style() {
+        let args = vec!["a".to_owned(), "b".to_owned()];
+        assert_eq!(format_args_java("%s / %s", &args), "a / b");
+        assert_eq!(format_args_java("%2$s-%1$s", &args), "b-a");
+        assert_eq!(format_args_java("100%%", &[]), "100%");
+        assert_eq!(format_args_java("§oWhat?", &[]), "What?");
+    }
+}
