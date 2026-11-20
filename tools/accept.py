@@ -17,6 +17,7 @@
 基准图在 tests/baselines/<场景>.png。
 """
 import json
+import math
 import shutil
 import sys
 import time
@@ -42,6 +43,8 @@ TOLERANCE = 0.001
 
 FLOOR = f"fill -6 {Y} -6 6 {Y} 6 stone"
 CLEAR = f"fill -6 {Y + 1} -6 6 {Y + 4} 6 air"
+# 站在 y+1 时的眼睛高度（原版玩家为 1.62）。
+EYE_Y = Y + 1 + 1.62
 
 
 def block(x, y, z):
@@ -50,6 +53,17 @@ def block(x, y, z):
 
 def entity(kind):
     return ("entity", kind)
+
+
+def point(x, y, z):
+    """看向一个方块的几何中心（用 look 而不是 look-at-block：流体不是方块目标）。"""
+    return ("point", x, y, z)
+
+
+def yaw_pitch(x, y, z):
+    """从固定站位看向方块中心的 yaw/pitch（原版：pitch 正数向下）。"""
+    dx, dy, dz = x, y + 0.5 - EYE_Y, z
+    return math.degrees(math.atan2(-dx, dz)), math.degrees(math.atan2(-dy, math.hypot(dx, dz)))
 
 
 def scene(name, setup=(), look=None, actions=(), frozen=(), wait=1.5):
@@ -191,6 +205,15 @@ SCENES = [
         setup=[f"setblock 0 {Y + 1} 3 minecraft:dirt"],
         look=block(0, Y + 1, 3),
         actions=["give minecraft:wooden_shovel", "select minecraft:wooden_shovel", "wait 0.5"],
+    ),
+    # 流体：在地板上挖一格做水池，四周都是石头，液体不会流走。
+    scene("water", setup=[f"setblock 0 {Y} 2 water"], look=point(0, Y, 2)),
+    scene("lava", setup=[f"setblock 0 {Y} 2 lava"], look=point(0, Y, 2)),
+    # 海草：合水的方块仍然显示方块信息，而不是“水”。
+    scene(
+        "seagrass",
+        setup=[f"setblock 0 {Y} 2 water", f"setblock 0 {Y} 2 minecraft:seagrass"],
+        look=point(0, Y, 2),
     ),
 ]
 
@@ -344,6 +367,11 @@ def look_at(ctl, target, r):
     if target is None:
         return False
     kind = target[0]
+    if kind == "point":
+        _, x, y, z = target
+        yaw, pitch = yaw_pitch(x, y, z)
+        ctl("look", f"{yaw:.3f}", f"{pitch:.3f}", timeout=30)
+        return True
     if kind == "block":
         _, x, y, z = target
         ctl("look-at-block", x, y, z, timeout=30)

@@ -11,6 +11,7 @@ use mod_api::{
 };
 
 mod client;
+mod fluid;
 mod harvest;
 #[cfg(test)]
 mod lang_keys_test;

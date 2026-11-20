@@ -81,7 +81,9 @@ pub const REQUEST_INTERVAL: u32 = 10;
 
 /// 每个客户端 tick 调用：更新目标，返回需要发送的请求。
 pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
-    let target = host.crosshair_target();
+    let fluid = fluid_target(host);
+    // 显示流体时不向服务端要数据（流体信息全在客户端算）。
+    let target = if fluid.is_some() { None } else { host.crosshair_target() };
     let net = target.as_ref().and_then(net_target);
     // 先在锁内更新目标、取出服务端数据，放锁后再读宿主组装提示框。
     let (server, request) = {
@@ -99,9 +101,35 @@ pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
         (st.server.clone(), request)
     };
     let detail = shift_down(host);
-    let tooltip = target.as_ref().and_then(|t| build(host, t, server.as_ref(), detail));
+    let tooltip = match &fluid {
+        Some(fluid) => Some(fluid_tooltip(host, fluid)),
+        None => target.as_ref().and_then(|t| build(host, t, server.as_ref(), detail)),
+    };
     lock(state()).tooltip = tooltip;
     request
+}
+
+/// 视线上的流体；准星命中的实体比流体近时不显示流体。
+fn fluid_target(host: &dyn ClientHost) -> Option<crate::fluid::Fluid> {
+    let fluid = crate::fluid::target(host)?;
+    let closer_entity = match host.crosshair_target() {
+        Some(CrosshairTarget::Entity { point, .. }) => {
+            crate::fluid::eye(host).is_some_and(|eye| crate::fluid::distance(eye, point) <= fluid.distance)
+        }
+        // 方块命中格本身不参与流体判定，能看到的流体一定在它之前。
+        _ => false,
+    };
+    (!closer_entity).then_some(fluid)
+}
+
+fn fluid_tooltip(host: &dyn ClientHost, fluid: &crate::fluid::Fluid) -> Tooltip {
+    let namespace = fluid.id.split(':').next().unwrap_or("minecraft").to_owned();
+    Tooltip {
+        icon: host.fluid_bucket(&fluid.id),
+        title: block_name(host, &fluid.id),
+        rows: Vec::new(),
+        mod_name: mod_name(host, &namespace),
+    }
 }
 
 fn shift_down(host: &dyn ClientHost) -> bool {
