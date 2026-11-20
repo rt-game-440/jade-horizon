@@ -101,9 +101,19 @@ SCENES = [
         look=block(0, Y + 1, -3),
     ),
     scene(
+        "repeater",
+        setup=[f"setblock 1 {Y + 1} 1 minecraft:repeater[facing=north,delay=3]"],
+        look=block(1, Y + 1, 1),
+    ),
+    scene(
         "note_block",
         setup=[f"setblock 2 {Y + 1} 2 minecraft:note_block[instrument=harp,note=7]"],
         look=block(2, Y + 1, 2),
+    ),
+    scene(
+        "beehive",
+        setup=[f"setblock -1 {Y + 1} 1 minecraft:beehive[facing=north,honey_level=3]"],
+        look=block(-1, Y + 1, 1),
     ),
     scene(
         "brewing_stand",

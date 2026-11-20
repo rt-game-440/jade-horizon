@@ -130,6 +130,15 @@ fn block_pos(pos: &mod_api::BlockPos) -> [i32; 3] {
 const GRAY: u32 = 0xFFAA_AAAA;
 const RED: u32 = 0xFFFF_5555;
 
+/// 蜂巢最多 5 级蜂蜜。
+const HONEY_MAX: u32 = 5;
+
+/// “3 ticks”/“1 tick”，中文两处都是“3刻”。
+fn ticks_text(host: &dyn ClientHost, ticks: u32) -> String {
+    let key = if ticks == 1 { "jade.horizon.tick" } else { "jade.horizon.ticks" };
+    tr(host, key, &[ticks.to_string()])
+}
+
 fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&ServerData>) -> Option<Tooltip> {
     let mut tip = Tooltip::default();
     let namespace;
@@ -199,7 +208,8 @@ fn block_rows(host: &dyn ClientHost, id: &str, props: &HashMap<String, String>, 
         "repeater" => {
             if let Some(d) = prop("delay") {
                 let ticks = d.parse::<u32>().unwrap_or(1);
-                rows.push(Row::Line(tr(host, "tooltip.jade.delay", &[format!("{ticks} tick")]), GRAY));
+                let text = ticks_text(host, ticks);
+                rows.push(Row::Line(tr(host, "tooltip.jade.delay", &[text]), GRAY));
             }
         }
         "comparator" => {
@@ -217,13 +227,16 @@ fn block_rows(host: &dyn ClientHost, id: &str, props: &HashMap<String, String>, 
         }
         "beehive" | "bee_nest" => {
             if let Some(h) = prop("honey_level") {
-                rows.push(Row::Line(tr(host, "jade.beehive.honey", &[format!("{h} / 5")]), GRAY));
+                let amount = tr(host, "jade.fraction", &[h.to_owned(), HONEY_MAX.to_string()]);
+                rows.push(Row::Line(tr(host, "jade.beehive.honey", &[amount]), GRAY));
             }
         }
         "note_block" => {
             if let (Some(note), Some(inst)) = (prop("note"), prop("instrument")) {
                 let inst = tr(host, &format!("jade.instrument.{inst}"), &[]);
-                rows.push(Row::Line(format!("{inst} ({})", note_name(note.parse().unwrap_or(0))), GRAY));
+                let note = note_name(note.parse().unwrap_or(0)).to_owned();
+                let text = tr(host, "jade.horizon.note_block", &[inst, note]);
+                rows.push(Row::Line(text, GRAY));
             }
         }
         "tnt" => {
