@@ -247,6 +247,7 @@
 	"jade.horizon.tick": "%s tick",
 	"jade.horizon.ticks": "%s ticks",
 	"jade.horizon.note_block": "%s (%s)",
+	"jade.horizon.painting": "Painting: %s",
 	"jade.horizon.shift_for_more": "Hold Shift for more",
 	"jade.beehive.bees": "Bees: %s",
 	"jade.beehive.honey": "Honey: %s",

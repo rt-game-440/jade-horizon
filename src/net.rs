@@ -59,9 +59,11 @@ pub struct ServerData {
     /// 实体生命值与上限；客户端读不到生命值时用它。上限为 0 表示没有。
     pub health: f32,
     pub max_health: f32,
+    /// 实体盔甲值；0 表示没有。
+    pub armor: f32,
 }
 
 pub const REQUEST_ID: &str = "jade:request";
 pub const DATA_ID: &str = "jade:server_data";
 /// 网络协议版本；两端不一致时视同对方没装本 mod。
-pub const PROTOCOL: &str = "2";
+pub const PROTOCOL: &str = "3";

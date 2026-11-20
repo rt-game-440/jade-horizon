@@ -57,6 +57,7 @@ fn game_keys() -> Vec<String> {
         "merchant.level.1",
         "painting.minecraft.kebab.title",
         "block.minecraft.water",
+        "effect.duration.infinite",
     ]
     .iter()
     .map(|key| (*key).to_owned())

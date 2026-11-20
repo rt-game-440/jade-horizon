@@ -241,6 +241,49 @@ SCENES = [
         setup=[f"setblock 0 {Y} 2 water", f"setblock 0 {Y} 2 minecraft:seagrass"],
         look=point(0, Y, 2),
     ),
+    # 实体信息（#6）：盔甲值、药水效果、马类、村民、主人、掉落物、盔甲架、画。
+    scene(
+        "armored_zombie",
+        setup=[
+            f"summon minecraft:zombie -1.5 {Y + 1} -2.5 "
+            '{NoAI:1b,Silent:1b,PersistenceRequired:1b,active_effects:[{id:"minecraft:speed",amplifier:1b,duration:-1}],'
+            'equipment:{head:{id:"minecraft:iron_helmet",count:1},chest:{id:"minecraft:iron_chestplate",count:1}}}'
+        ],
+        look=entity("minecraft:zombie"),
+    ),
+    scene(
+        "horse",
+        setup=[
+            f"summon minecraft:horse -1.5 {Y + 1} -2.5 "
+            "{NoAI:1b,Silent:1b,attributes:[{id:\"minecraft:jump_strength\",base:0.7d},{id:\"minecraft:movement_speed\",base:0.225d}]}"
+        ],
+        look=entity("minecraft:horse"),
+    ),
+    scene(
+        "villager",
+        setup=[
+            f"summon minecraft:villager -1.5 {Y + 1} -2.5 "
+            '{NoAI:1b,Silent:1b,VillagerData:{profession:"minecraft:librarian",level:2,type:"minecraft:plains"}}'
+        ],
+        look=entity("minecraft:villager"),
+    ),
+    scene(
+        "armor_stand",
+        setup=[
+            f"summon minecraft:armor_stand -1.5 {Y + 1} -2.5 "
+            '{equipment:{head:{id:"minecraft:iron_helmet",count:1},mainhand:{id:"minecraft:diamond_sword",count:1}}}'
+        ],
+        look=point(-1.5, Y + 1, -2.5),
+    ),
+    scene(
+        "painting",
+        setup=[
+            f"setblock 0 {Y + 1} -5 minecraft:stone",
+            f"summon minecraft:painting 0 {Y + 1} -4 "
+            '{variant:"minecraft:kebab",facing:0b}',
+        ],
+        look=point(0, Y + 1, -4.4),
+    ),
 ]
 
 # 截图前一刻 /tick freeze，截完立即 /tick unfreeze。

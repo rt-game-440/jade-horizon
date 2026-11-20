@@ -16,6 +16,8 @@ pub enum Row {
     Line(String, u32),
     /// 生命值：当前、最大。
     Health(f32, f32),
+    /// 盔甲值：每 2 点一个图标。
+    Armor(f32),
     /// 一排物品图标与数量。
     Items(Vec<(ItemKey, i32)>),
     /// 输入物品 → 进度箭头 → 输出物品。
@@ -227,6 +229,7 @@ const DETAIL_KEYS: &[&str] = &[
     "jade.mobbreeding.time",
     "jade.mobbreeding.fed",
     "jade.nextEgg",
+    "jade.owner",
 ];
 
 const COMPACT_ITEM_ROWS: usize = 1;
@@ -403,6 +406,10 @@ fn server_rows<'a>(host: &dyn ClientHost, data: &'a ServerData, rows: &mut Vec<(
     if data.max_health > 0.0 && !rows.iter().any(|(r, _)| matches!(r, Row::Health(..))) {
         rows.insert(0, (Row::Health(data.health, data.max_health), None));
     }
+    if data.armor > 0.0 {
+        let at = rows.iter().position(|(r, _)| matches!(r, Row::Health(..))).map_or(0, |i| i + 1);
+        rows.insert(at, (Row::Armor(data.armor), None));
+    }
     for p in &data.progress {
         let items = |v: &[crate::net::NetItem]| v.iter().filter_map(|i| Some((item_key(host, &i.id)?, i.count))).collect();
         let fraction = if p.total > 0 { (p.current as f32 / p.total as f32).clamp(0.0, 1.0) } else { 0.0 };
@@ -430,8 +437,9 @@ fn net_line(host: &dyn ClientHost, line: &NetLine) -> String {
 }
 
 fn arg(host: &dyn ClientHost, a: &str) -> String {
-    if let Some(key) = a.strip_prefix('@') {
-        translated(host, key)
+    if a.starts_with('@') {
+        // 一个参数可由空格连接多段：`@effect.x.speed @enchantment.level.2`；以 `@` 开头的段翻译，其余原样。
+        a.split(' ').map(|part| part.strip_prefix('@').map_or_else(|| part.to_owned(), |key| translated(host, key))).collect::<Vec<_>>().join(" ")
     } else if let Some(t) = a.strip_prefix("#ticks:") {
         duration(host, t.parse().unwrap_or(0))
     } else {

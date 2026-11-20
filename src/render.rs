@@ -18,7 +18,7 @@ const BORDER_BOTTOM: u32 = 0x5028_007F;
 
 fn row_height(row: &Row) -> f32 {
     match row {
-        Row::Line(..) | Row::Health(..) => LINE,
+        Row::Line(..) | Row::Health(..) | Row::Armor(..) => LINE,
         Row::Items(_) | Row::Progress { .. } | Row::Harvest { .. } => SLOT,
     }
 }
@@ -33,6 +33,7 @@ fn row_width(draw: &dyn DrawContext, row: &Row) -> f32 {
                 draw.text_width(&health_text(0.0, *max)) + 2.0
             }
         }
+        Row::Armor(armor) => (armor / 2.0).ceil().min(10.0) * 8.0 + 1.0,
         Row::Items(items) => items.len() as f32 * SLOT,
         Row::Progress { inputs, outputs, .. } => (inputs.len() + outputs.len()) as f32 * SLOT + 26.0,
         Row::Harvest { tool, .. } => (if tool.is_some() { SLOT } else { 0.0 }) + MARK_W,
@@ -110,6 +111,7 @@ fn draw_row(draw: &mut dyn DrawContext, row: &Row, x: f32, y: f32) {
     match row {
         Row::Line(text, color) => draw.text(text, [x, y], *color, true),
         Row::Health(hp, max) => health(draw, *hp, *max, x, y),
+        Row::Armor(armor) => armor_row(draw, *armor, x, y),
         Row::Items(items) => {
             for (i, (item, count)) in items.iter().enumerate() {
                 slot(draw, *item, *count, x + i as f32 * SLOT, y);
@@ -203,6 +205,19 @@ fn health(draw: &mut dyn DrawContext, hp: f32, max: f32, x: f32, y: f32) {
             gui_sprite(draw, "hud/heart/full", [0.0, 0.0, 9.0, 9.0], dst, None);
         } else if filled > 0.0 {
             gui_sprite(draw, "hud/heart/half", [0.0, 0.0, 9.0, 9.0], dst, None);
+        }
+    }
+}
+
+/// 盔甲值：满、半图标，每图标 2 点；超过 20 点画满 10 个。
+fn armor_row(draw: &mut dyn DrawContext, armor: f32, x: f32, y: f32) {
+    let icons = (armor / 2.0).ceil().min(10.0) as i32;
+    for i in 0..icons {
+        let full = armor - i as f32 * 2.0 >= 2.0;
+        let path = if full { "hud/armor_full" } else { "hud/armor_half" };
+        if !gui_sprite(draw, path, [0.0, 0.0, 9.0, 9.0], [x + i as f32 * 8.0, y, 9.0, 9.0], None) {
+            draw.text(&format!("🛡 {armor:.0}"), [x, y], 0xFFAA_AAAA, true);
+            return;
         }
     }
 }
