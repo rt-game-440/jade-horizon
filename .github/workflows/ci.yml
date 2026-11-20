@@ -1,0 +1,67 @@
+# 检查、测试并构建 jade.hmod。用 Cargo.toml 固定的 SDK 版本。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # 固定 cargo-horizon-mod 版本，与 Cargo.toml 固定的 SDK 配套使用。
+  HORIZON_REPO: https://github.com/horizon-rust/horizon
+  HORIZON_TOOL_REV: 89671a0eb8806ea5f53df929c4bb520248d813eb
+  RUST_TOOLCHAIN: 1.99.1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target wasm32-unknown-unknown
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: 缓存 cargo-horizon-mod
+        id: tool-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-horizon-mod
+          key: cargo-horizon-mod-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ env.HORIZON_TOOL_REV }}
+
+      - name: 安装 cargo-horizon-mod
+        if: steps.tool-cache.outputs.cache-hit != 'true'
+        run: cargo install --git "$HORIZON_REPO" --rev "$HORIZON_TOOL_REV" cargo-horizon-mod --locked
+
+      - name: 缓存 SDK 与构建产物
+        uses: actions/cache@v4
+        with:
+          path: |
+            .horizon
+            target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: build-${{ runner.os }}-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}
+          restore-keys: build-${{ runner.os }}-
+
+      - name: 检查 API 用法
+        run: cargo horizon-mod check
+
+      - name: 单元测试
+        run: cargo test
+
+      - name: 构建 wasm mod
+        run: cargo horizon-mod build --wasm
+
+      - name: 上传 jade.hmod
+        uses: actions/upload-artifact@v4
+        with:
+          name: jade-hmod
+          path: target/horizon-mod/jade.hmod
+          if-no-files-found: error

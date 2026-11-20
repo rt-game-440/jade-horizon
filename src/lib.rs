@@ -6,18 +6,19 @@
 use std::sync::OnceLock;
 
 use mod_api::{
-    self, ClientHost, ClientTickPostEvent, GuiRenderPostEvent, Hooks, HudMode, PayloadId, Registrar,
-    RegistrationContext, ToClient, ToServer,
+    self, ClientHost, ClientTickPostEvent, GuiRenderPostEvent, Hooks, HudMode, PayloadId, PlayerLoggedOutEvent,
+    Registrar, RegistrationContext, ServerHost, ToClient, ToServer,
 };
 
 mod client;
 #[cfg(test)]
 mod lang_keys_test;
+mod limit;
 mod net;
 mod render;
 mod server;
 
-use net::{DATA_ID, REQUEST_ID, Request, ServerData};
+use net::{DATA_ID, PROTOCOL, REQUEST_ID, Request, ServerData};
 
 static TO_SERVER: OnceLock<ToServer<Request>> = OnceLock::new();
 static TO_CLIENT: OnceLock<ToClient<ServerData>> = OnceLock::new();
@@ -36,12 +37,12 @@ impl Hooks for Jade {
         }
         let mut payloads = r.payload_handlers();
         // optional：对方没装本 mod 时照常进服，只是没有服务端数据。
-        let mut view = payloads.registrar("1").optional();
+        let mut view = payloads.registrar(PROTOCOL).optional();
         let to_server = view.play_to_server_typed::<Request>(PayloadId(REQUEST_ID.into()), |request, cx| {
             let player = cx.player().map_err(|e| format!("{e:?}"))?;
             let data = {
                 let host = cx.server_host().map_err(|e| format!("{e:?}"))?;
-                server::collect(host, player, &request.target)
+                server::handle(host, player, &request)
             };
             if let Some(data) = data {
                 if let Some(reply) = TO_CLIENT.get() {
@@ -60,12 +61,16 @@ impl Hooks for Jade {
     }
 
     fn client_tick_post(&self, host: &mut dyn ClientHost, _event: &mut ClientTickPostEvent) {
-        if let Some(target) = client::tick(host) {
+        if let Some(request) = client::tick(host) {
             if let Some(token) = TO_SERVER.get() {
                 // 服务端没装本 mod 时返回 UnsupportedPeer，忽略。
-                let _ = token.send(host, &Request { target });
+                let _ = token.send(host, &request);
             }
         }
+    }
+
+    fn player_logged_out(&self, _host: &mut dyn ServerHost, event: &mut PlayerLoggedOutEvent<'_>) {
+        server::forget(event.player);
     }
 
     fn gui_render_post(&self, host: &dyn ClientHost, event: &mut GuiRenderPostEvent<'_>) {

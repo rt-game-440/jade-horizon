@@ -2,9 +2,32 @@
 //!
 //! 对应 Jade 中需要服务端的 provider：ItemStorage（容器内容）、Furnace、BrewingStand、
 //! Campfire、Beehive、MobSpawner、Jukebox、Lectern、MobGrowth、MobBreeding 等。
+use std::sync::{Mutex, OnceLock};
+
 use mod_api::{Compound, PlayerRef, ServerHost, Tag};
 
-use crate::net::{KIND_BLOCK, KIND_ENTITY, NetItem, NetLine, NetProgress, NetTarget, ServerData};
+use crate::limit::Limiter;
+use crate::net::{KIND_BLOCK, KIND_ENTITY, NetItem, NetLine, NetProgress, NetTarget, Request, ServerData};
+
+fn limiter() -> std::sync::MutexGuard<'static, Limiter> {
+    static LIMITER: OnceLock<Mutex<Limiter>> = OnceLock::new();
+    LIMITER.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 处理一个请求：限流、收集数据、去重，返回需要回给玩家的数据。
+pub fn handle(host: &mut dyn ServerHost, player: PlayerRef, request: &Request) -> Option<ServerData> {
+    let now = player.level(&*host)?.game_time(&*host)?;
+    if !limiter().admit(player.uuid(), now) {
+        return None;
+    }
+    let data = collect(host, player, &request.target)?;
+    limiter().should_send(player.uuid(), request.fresh, &data).then_some(data)
+}
+
+/// 玩家离开时清掉限流状态。
+pub fn forget(player: u128) {
+    limiter().forget(player);
+}
 
 /// 玩家与目标的最大距离（格）。超出则不回数据，避免被用来探查远处的箱子。
 const MAX_DISTANCE: f64 = 16.0;

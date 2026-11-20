@@ -20,6 +20,8 @@ pub struct NetTarget {
 #[derive(PayloadCodec, Clone, Debug, Default)]
 pub struct Request {
     pub target: NetTarget,
+    /// 客户端刚换到这个目标：服务端即使数据没变也要回包。
+    pub fresh: bool,
 }
 
 /// 一格物品：物品 id 与数量。
@@ -61,3 +63,5 @@ pub struct ServerData {
 
 pub const REQUEST_ID: &str = "jade:request";
 pub const DATA_ID: &str = "jade:server_data";
+/// 网络协议版本；两端不一致时视同对方没装本 mod。
+pub const PROTOCOL: &str = "2";

@@ -1,0 +1,76 @@
+# 每天用最新的 Horizon SDK 试构建，及早发现接口变化。
+# 失败时开（或更新）一个带错误摘要的 issue；成功时关闭它。不会改动仓库代码。
+name: 最新 SDK 构建
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  HORIZON_REPO: https://github.com/horizon-rust/horizon
+  RUST_TOOLCHAIN: 1.99.1
+  CARGO_TERM_COLOR: always
+  ISSUE_TITLE: 最新 Horizon SDK 构建失败
+
+jobs:
+  latest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target wasm32-unknown-unknown
+          rustup default "$RUST_TOOLCHAIN"
+
+      # 工具本身也用最新版，SDK 格式变化时才跟得上。
+      - name: 安装最新 cargo-horizon-mod
+        run: cargo install --git "$HORIZON_REPO" cargo-horizon-mod --locked
+
+      - name: 升级到最新 SDK 并构建
+        id: build
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          {
+            cargo horizon-mod update
+            echo "SDK: $(grep '^sdk' Cargo.toml)"
+            cargo horizon-mod check
+            cargo test
+            cargo horizon-mod build --wasm
+          } 2>&1 | tee build.log
+
+      - name: 失败时开或更新 issue
+        if: steps.build.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "定时任务用最新 Horizon SDK 构建失败：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo '```'
+            tail -n 80 build.log
+            echo '```'
+          } > body.md
+          num=$(gh issue list --state open --search "in:title \"$ISSUE_TITLE\"" --json number -q '.[0].number')
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body-file body.md
+          else
+            gh issue create --title "$ISSUE_TITLE" --label P0 --label ci --body-file body.md
+          fi
+          exit 1
+
+      - name: 成功时关闭 issue
+        if: steps.build.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          num=$(gh issue list --state open --search "in:title \"$ISSUE_TITLE\"" --json number -q '.[0].number')
+          if [ -n "$num" ]; then
+            gh issue close "$num" --comment "最新 SDK 构建已恢复：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi

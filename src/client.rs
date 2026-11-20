@@ -7,7 +7,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mod_api::{BlockState, ClientHost, CrosshairTarget, Identifier, ItemKey};
 
-use crate::net::{KIND_BLOCK, KIND_ENTITY, NetLine, NetTarget, ServerData};
+use crate::net::{KIND_BLOCK, KIND_ENTITY, NetLine, NetTarget, Request, ServerData};
 
 /// 提示框里的一行。
 #[derive(Clone, Debug)]
@@ -73,34 +73,41 @@ pub fn current() -> Option<Tooltip> {
     lock(state()).tooltip.clone()
 }
 
-/// 每隔多少 tick 重新请求一次服务端数据（进度条需要刷新）。
-const REQUEST_INTERVAL: u32 = 5;
+/// 同一目标每隔多少 tick 刷新一次服务端数据（进度条、容器内容需要更新）。
+/// 换目标时不等这个间隔，立即请求。
+pub const REQUEST_INTERVAL: u32 = 10;
 
 /// 每个客户端 tick 调用：更新目标，返回需要发送的请求。
-pub fn tick(host: &mut dyn ClientHost) -> Option<NetTarget> {
+pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
     let target = host.crosshair_target();
     let net = target.as_ref().and_then(net_target);
     // 先在锁内更新目标、取出服务端数据，放锁后再读宿主组装提示框。
     let (server, request) = {
         let mut st = lock(state());
-        if st.target != net {
+        let changed = st.target != net;
+        if changed {
             st.target = net.clone();
             st.server = None;
-            st.ticks_since_request = REQUEST_INTERVAL;
         }
-        let mut request = None;
-        if let Some(net) = &net {
-            st.ticks_since_request += 1;
-            if st.ticks_since_request >= REQUEST_INTERVAL {
-                st.ticks_since_request = 0;
-                request = Some(net.clone());
-            }
-        }
+        let request = net.and_then(|target| {
+            let (send, ticks) = schedule(changed, st.ticks_since_request);
+            st.ticks_since_request = ticks;
+            send.then_some(Request { target, fresh: changed })
+        });
         (st.server.clone(), request)
     };
     let tooltip = target.as_ref().and_then(|t| build(host, t, server.as_ref()));
     lock(state()).tooltip = tooltip;
     request
+}
+
+/// 本 tick 是否发请求，以及更新后的计数：换目标立即发，否则每 [`REQUEST_INTERVAL`] tick 一次。
+fn schedule(changed: bool, ticks_since_request: u32) -> (bool, u32) {
+    if changed || ticks_since_request + 1 >= REQUEST_INTERVAL {
+        (true, 0)
+    } else {
+        (false, ticks_since_request + 1)
+    }
 }
 
 fn net_target(target: &CrosshairTarget) -> Option<NetTarget> {
@@ -396,6 +403,22 @@ fn strip_formatting(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requests_on_change_then_every_interval() {
+        // 换目标立即发；之后同一目标每 REQUEST_INTERVAL tick 发一次。
+        let (mut sent, mut ticks) = (vec![], 0);
+        for t in 0..30u32 {
+            let (send, n) = schedule(t == 0, ticks);
+            ticks = n;
+            if send {
+                sent.push(t);
+            }
+        }
+        assert_eq!(sent, vec![0, 10, 20]);
+        // 中途换目标立即发并重新计时。
+        assert_eq!(schedule(true, 3), (true, 0));
+    }
 
     #[test]
     fn formats_java_style() {
