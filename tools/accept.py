@@ -322,7 +322,7 @@ def server_time(srv):
     return int(digits) if digits else None
 
 
-def launch(ctl, srv, resources):
+def launch(ctl, srv, resources, offscreen=True):
     """建服务端目录、装 jade、起服务端，再离屏起一个客户端进服。"""
     sdir = WORK / "server"
     sdir.mkdir(parents=True, exist_ok=True)
@@ -372,7 +372,7 @@ def launch(ctl, srv, resources):
     prepare_options(gdir)
     ctl(
         "launch",
-        "--offscreen",
+        *(["--offscreen"] if offscreen else []),
         "--wait",
         "--server",
         f"127.0.0.1:{PORT}",
