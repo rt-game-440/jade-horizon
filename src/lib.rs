@@ -6,7 +6,7 @@
 use std::sync::OnceLock;
 
 use mod_api::{
-    self, ClientHost, ClientTickPostEvent, GuiRenderPostEvent, Hooks, HudMode, PayloadId, PlayerLoggedOutEvent,
+    self, ClientHost, ClientTickPostEvent, GuiRenderPostEvent, Hooks, HudMode, PayloadId, PlayerLoggedInEvent, PlayerLoggedOutEvent,
     Registrar, RegistrationContext, ServerHost, ToClient, ToServer,
 };
 
@@ -79,6 +79,10 @@ impl Hooks for Jade {
                 let _ = token.send(host, &request);
             }
         }
+    }
+
+    fn player_logged_in(&self, _host: &mut dyn ServerHost, event: &mut PlayerLoggedInEvent<'_>) {
+        server::remember_name(event.player, event.name);
     }
 
     fn player_logged_out(&self, _host: &mut dyn ServerHost, event: &mut PlayerLoggedOutEvent<'_>) {
