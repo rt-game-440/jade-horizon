@@ -247,6 +247,7 @@
 	"jade.horizon.tick": "%s刻",
 	"jade.horizon.ticks": "%s刻",
 	"jade.horizon.note_block": "%s（%s）",
+	"jade.horizon.shift_for_more": "按住 Shift 查看更多",
 	"jade.beehive.bees": "蜜蜂数量：%s",
 	"jade.beehive.honey": "储蜜量：%s",
 	"config.jade.plugin_minecraft.note_block": "音符盒",

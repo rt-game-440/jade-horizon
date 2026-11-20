@@ -73,6 +73,28 @@ CHEST_NBT = (
     '{Items:[{Slot:0b,id:"minecraft:diamond",count:12},{Slot:1b,id:"minecraft:oak_log",count:64},'
     '{Slot:2b,id:"minecraft:oak_log",count:30},{Slot:5b,id:"minecraft:apple",count:1}]}'
 )
+CHEST_MORE_NBT = (
+    "{Items:["
+    + ",".join(
+        f'{{Slot:{i}b,id:"minecraft:{item}",count:{count}}}'
+        for i, (item, count) in enumerate(
+            [
+                ("diamond", 12),
+                ("iron_ingot", 32),
+                ("gold_ingot", 16),
+                ("emerald", 8),
+                ("coal", 64),
+                ("redstone", 45),
+                ("lapis_lazuli", 20),
+                ("quartz", 15),
+                ("copper_ingot", 24),
+                ("apple", 5),
+                ("bread", 9),
+            ]
+        )
+    )
+    + "]}"
+)
 BREWING_NBT = (
     '{Items:[{Slot:0b,id:"minecraft:potion",count:1},{Slot:3b,id:"minecraft:nether_wart",count:4},'
     '{Slot:4b,id:"minecraft:blaze_powder",count:2}],BrewTime:200s,Fuel:15b}'
@@ -89,6 +111,17 @@ SCENES = [
         "chest",
         setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_NBT}"],
         look=block(-3, Y + 1, 0),
+    ),
+    scene(
+        "chest_more",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_MORE_NBT}"],
+        look=block(-3, Y + 1, 0),
+    ),
+    scene(
+        "chest_more_shift",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_MORE_NBT}"],
+        look=block(-3, Y + 1, 0),
+        actions=["key shift down"],
     ),
     scene(
         "wheat",
@@ -125,6 +158,13 @@ SCENES = [
         "baby_pig",
         setup=[f"summon minecraft:pig -1.5 {Y + 1} -2.5 {{NoAI:1b,Age:-12000}}"],
         look=entity("minecraft:pig"),
+        frozen=["data merge entity @e[type=minecraft:pig,limit=1] {Age:-12000}"],
+    ),
+    scene(
+        "baby_pig_shift",
+        setup=[f"summon minecraft:pig -1.5 {Y + 1} -2.5 {{NoAI:1b,Age:-12000}}"],
+        look=entity("minecraft:pig"),
+        actions=["key shift down"],
         frozen=["data merge entity @e[type=minecraft:pig,limit=1] {Age:-12000}"],
     ),
     scene(
@@ -288,7 +328,7 @@ def look_at(ctl, target, r):
         return True
     _, text = ctl("entities", "10", target[1], timeout=30)
     try:
-        found = json.loads(text).get("entities", [])
+        found = [e for e in json.loads(text).get("entities", []) if e.get("health", 1) > 0]
     except Exception:
         found = []
     if not found:

@@ -10,7 +10,7 @@ use mod_api::{BlockState, ClientHost, CrosshairTarget, Identifier, ItemKey};
 use crate::net::{KIND_BLOCK, KIND_ENTITY, NetLine, NetTarget, Request, ServerData};
 
 /// 提示框里的一行。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Row {
     /// 普通文字与颜色。
     Line(String, u32),
@@ -96,9 +96,14 @@ pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
         });
         (st.server.clone(), request)
     };
-    let tooltip = target.as_ref().and_then(|t| build(host, t, server.as_ref()));
+    let detail = shift_down(host);
+    let tooltip = target.as_ref().and_then(|t| build(host, t, server.as_ref(), detail));
     lock(state()).tooltip = tooltip;
     request
+}
+
+fn shift_down(host: &dyn ClientHost) -> bool {
+    host.is_key_down("key.keyboard.left.shift") || host.is_key_down("key.keyboard.right.shift")
 }
 
 /// 本 tick 是否发请求，以及更新后的计数：换目标立即发，否则每 [`REQUEST_INTERVAL`] tick 一次。
@@ -139,8 +144,20 @@ fn ticks_text(host: &dyn ClientHost, ticks: u32) -> String {
     tr(host, key, &[ticks.to_string()])
 }
 
-fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&ServerData>) -> Option<Tooltip> {
+/// 精简模式下隐藏的服务端行键；按住 Shift 才显示。
+const DETAIL_KEYS: &[&str] = &[
+    "jade.mobgrowth.time",
+    "jade.mobbreeding.time",
+    "jade.mobbreeding.fed",
+    "jade.nextEgg",
+];
+
+const COMPACT_ITEM_ROWS: usize = 1;
+const DETAIL_ITEM_ROWS: usize = 6;
+
+fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&ServerData>, detail: bool) -> Option<Tooltip> {
     let mut tip = Tooltip::default();
+    let mut rows: Vec<(Row, Option<&str>)> = Vec::new();
     let namespace;
     match target {
         CrosshairTarget::Block { state, .. } => {
@@ -153,7 +170,9 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
             tip.icon = host.block_item(block).filter(|item| item.id(host) != "minecraft:air");
             tip.title = block_name(host, &id);
             let props = properties(host, *state);
-            block_rows(host, &id, &props, &mut tip.rows);
+            let mut plain = Vec::new();
+            block_rows(host, &id, &props, &mut plain);
+            rows.extend(plain.into_iter().map(|r| (r, None)));
         }
         CrosshairTarget::Entity { entity, .. } => {
             let kind = entity.kind(host).map(|k| k.id(host)).unwrap_or_default();
@@ -161,17 +180,47 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
             tip.title = entity.name(host).unwrap_or_else(|| translated(host, &key_of("entity", &kind)));
             if let Some(living) = host.living(*entity) {
                 if let (Some(hp), Some(max)) = (living.health(host), living.max_health(host)) {
-                    tip.rows.push(Row::Health(hp, max));
+                    rows.push((Row::Health(hp, max), None));
                 }
             }
         }
         _ => return None,
     }
     if let Some(data) = server {
-        server_rows(host, data, &mut tip.rows);
+        server_rows(host, data, &mut rows);
     }
+    let (mut visible, hidden) = visible_rows(rows, detail);
+    if hidden {
+        visible.push(Row::Line(tr(host, "jade.horizon.shift_for_more", &[]), GRAY));
+    }
+    tip.rows = visible;
     tip.mod_name = mod_name(host, &namespace);
     Some(tip)
+}
+
+/// 按精简/详细模式过滤行，返回 `(显示的行, 是否有内容被精简模式隐藏)`。
+fn visible_rows(rows: Vec<(Row, Option<&str>)>, detail: bool) -> (Vec<Row>, bool) {
+    let item_limit = if detail { DETAIL_ITEM_ROWS } else { COMPACT_ITEM_ROWS };
+    let mut item_rows = 0;
+    let mut out = Vec::with_capacity(rows.len());
+    let mut hidden = false;
+    for (row, key) in rows {
+        if matches!(row, Row::Items(_)) {
+            item_rows += 1;
+            if item_rows > item_limit {
+                if !detail && item_rows <= DETAIL_ITEM_ROWS {
+                    hidden = true;
+                }
+                continue;
+            }
+        }
+        if !detail && key.is_some_and(|k| DETAIL_KEYS.contains(&k)) {
+            hidden = true;
+            continue;
+        }
+        out.push(row);
+    }
+    (out, hidden)
 }
 
 /// `minecraft:wheat[age=7]` 的属性表。
@@ -269,25 +318,25 @@ fn note_name(note: u32) -> &'static str {
     NAMES[(note % 12) as usize]
 }
 
-fn server_rows(host: &dyn ClientHost, data: &ServerData, rows: &mut Vec<Row>) {
+fn server_rows<'a>(host: &dyn ClientHost, data: &'a ServerData, rows: &mut Vec<(Row, Option<&'a str>)>) {
     // 客户端读不到生物生命值时（Horizon 客户端未同步部分生物），用服务端的值，放在标题下第一行。
-    if data.max_health > 0.0 && !rows.iter().any(|r| matches!(r, Row::Health(..))) {
-        rows.insert(0, Row::Health(data.health, data.max_health));
+    if data.max_health > 0.0 && !rows.iter().any(|(r, _)| matches!(r, Row::Health(..))) {
+        rows.insert(0, (Row::Health(data.health, data.max_health), None));
     }
     for p in &data.progress {
         let items = |v: &[crate::net::NetItem]| v.iter().filter_map(|i| Some((item_key(host, &i.id)?, i.count))).collect();
         let fraction = if p.total > 0 { (p.current as f32 / p.total as f32).clamp(0.0, 1.0) } else { 0.0 };
-        rows.push(Row::Progress { inputs: items(&p.inputs), outputs: items(&p.outputs), fraction });
+        rows.push((Row::Progress { inputs: items(&p.inputs), outputs: items(&p.outputs), fraction }, None));
     }
     if !data.items.is_empty() {
         let items: Vec<_> = data.items.iter().filter_map(|i| Some((item_key(host, &i.id)?, i.count))).collect();
-        // 每行最多 9 个，与 Jade 默认的容器显示一致。
-        for chunk in items.chunks(9).take(6) {
-            rows.push(Row::Items(chunk.to_vec()));
+        // 每行最多 9 个，与 Jade 默认的容器显示一致；显示几行由 visible_rows 决定。
+        for chunk in items.chunks(9) {
+            rows.push((Row::Items(chunk.to_vec()), None));
         }
     }
     for line in &data.lines {
-        rows.push(Row::Line(net_line(host, line), GRAY));
+        rows.push((Row::Line(net_line(host, line), GRAY), Some(line.key.as_str())));
     }
 }
 
@@ -440,5 +489,43 @@ mod tests {
         assert_eq!(format_args_java("%2$s-%1$s", &args), "b-a");
         assert_eq!(format_args_java("100%%", &[]), "100%");
         assert_eq!(format_args_java("§oWhat?", &[]), "What?");
+    }
+
+    #[test]
+    fn compact_limits_item_rows_to_one() {
+        let one = vec![(Row::Items(vec![]), None)];
+        assert_eq!(visible_rows(one.clone(), false), (vec![Row::Items(vec![])], false));
+        assert_eq!(visible_rows(one, true), (vec![Row::Items(vec![])], false));
+
+        let seven: Vec<_> = (0..7).map(|_| (Row::Items(vec![]), None)).collect();
+        let (compact, hidden) = visible_rows(seven.clone(), false);
+        assert_eq!(compact.len(), 1);
+        assert!(hidden);
+
+        let (detail, hidden) = visible_rows(seven, true);
+        assert_eq!(detail.len(), 6);
+        assert!(!hidden);
+    }
+
+    #[test]
+    fn compact_hides_detail_keys_only() {
+        let rows = vec![
+            (Row::Health(10.0, 10.0), None),
+            (Row::Line("Bees: 3".into(), GRAY), Some("jade.beehive.bees")),
+            (Row::Line("Growing time: 10m".into(), GRAY), Some("jade.mobgrowth.time")),
+            (Row::Line("Breeding CD: 2m".into(), GRAY), Some("jade.mobbreeding.time")),
+            (Row::Line("Breeding CD: In Love".into(), GRAY), Some("jade.mobbreeding.fed")),
+            (Row::Line("Next egg: 5m".into(), GRAY), Some("jade.nextEgg")),
+        ];
+        let (compact, hidden) = visible_rows(rows.clone(), false);
+        assert_eq!(
+            compact,
+            vec![Row::Health(10.0, 10.0), Row::Line("Bees: 3".into(), GRAY)]
+        );
+        assert!(hidden);
+
+        let (detail, hidden) = visible_rows(rows, true);
+        assert_eq!(detail.len(), 6);
+        assert!(!hidden);
     }
 }
