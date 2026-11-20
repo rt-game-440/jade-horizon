@@ -45,9 +45,24 @@ cargo horizon-mod check
 
 ## 游戏内验收
 
-需要已安装 Horizon 启动器（并且没开 No AI）。脚本会把 `target/horizon-mod/jade.hmod` 部署到默认实例的
-`horizon-mods/` 并在 `horizon-mods.txt` 中启用，离屏启动测试世界 `jade-verify`，在 y=150 搭平台、放置熔炉、
-箱子、小麦、比较器、音符盒、酿造台和两只生物，逐个对准后截图：
+需要已安装 Horizon 启动器（并且没开 No AI）。脚本会构建一个装了 jade 的专用服务端，
+再离屏启动一个客户端进服，在 y=150 搭平台、逐个场景摆方块和生物，对准后截图，
+裁出顶部的 Jade 提示框并与 `tests/baselines/` 里的基准图逐像素比对：
+
+```powershell
+python -I tools/accept.py                      # 比对全部场景
+python -I tools/accept.py --only chest          # 只跑指定场景（可重复给）
+python -I tools/accept.py --update              # 重写全部基准
+python -I tools/accept.py --update --only chest # 只重写受影响的场景
+```
+
+窗口固定 1280×720。截图前一刻 `/tick freeze`、截完立即 `/tick unfreeze`，
+并把场景里的动态值（熔炉进度、生物成长时间）在冻结后固定，所以同一场景可以反复复现。
+比对规则：任一通道相差超过 32 的像素超过 0.1%（或尺寸不同）判为失败；
+失败时 `logs/accept-<时间>/` 下有 `<场景>-actual.png`、`<场景>-diff.png`（差异标红）和 `report.txt`，
+全部场景的提示框裁剪图是 `<场景>.png`。改动显示内容后用 `--update --only` 只更新受影响的场景。
+
+需要人工看图时用 `tools/verify.py`，它启动默认实例的测试世界 `jade-verify`，逐个对准并截整屏：
 
 ```powershell
 python -I tools/verify.py            # 加 --no-deploy 跳过部署，--keep-open 结束后不退出游戏
