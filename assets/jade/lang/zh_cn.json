@@ -249,6 +249,7 @@
 	"jade.horizon.note_block": "%s（%s）",
 	"jade.horizon.painting": "画作：%s",
 	"jade.horizon.shift_for_more": "按住 Shift 查看更多",
+	"jade.horizon.more_items": "容器内还有更多物品",
 	"jade.beehive.bees": "蜜蜂数量：%s",
 	"jade.beehive.honey": "储蜜量：%s",
 	"config.jade.plugin_minecraft.note_block": "音符盒",

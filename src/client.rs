@@ -274,27 +274,34 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
     if let Some(data) = server {
         server_rows(host, data, &mut rows);
     }
-    let (mut visible, hidden) = visible_rows(rows, detail);
+    let (mut visible, hidden, truncated) = visible_rows(rows, detail);
     if hidden {
         visible.push(Row::Line(tr(host, "jade.horizon.shift_for_more", &[]), GRAY));
+    }
+    if truncated {
+        visible.push(Row::Line(tr(host, "jade.horizon.more_items", &[]), GRAY));
     }
     tip.rows = visible;
     tip.mod_name = mod_name(host, &namespace);
     Some(tip)
 }
 
-/// 按精简/详细模式过滤行，返回 `(显示的行, 是否有内容被精简模式隐藏)`。
-fn visible_rows(rows: Vec<(Row, Option<&str>)>, detail: bool) -> (Vec<Row>, bool) {
+/// 按精简/详细模式过滤行，返回 `(显示的行, 精简模式隐藏了内容, 详细模式也放不下)`。
+fn visible_rows(rows: Vec<(Row, Option<&str>)>, detail: bool) -> (Vec<Row>, bool, bool) {
     let item_limit = if detail { DETAIL_ITEM_ROWS } else { COMPACT_ITEM_ROWS };
     let mut item_rows = 0;
     let mut out = Vec::with_capacity(rows.len());
     let mut hidden = false;
+    let mut truncated = false;
     for (row, key) in rows {
         if matches!(row, Row::Items(_)) {
             item_rows += 1;
             if item_rows > item_limit {
-                if !detail && item_rows <= DETAIL_ITEM_ROWS {
+                if !detail {
                     hidden = true;
+                }
+                if item_rows > DETAIL_ITEM_ROWS {
+                    truncated = true;
                 }
                 continue;
             }
@@ -305,7 +312,7 @@ fn visible_rows(rows: Vec<(Row, Option<&str>)>, detail: bool) -> (Vec<Row>, bool
         }
         out.push(row);
     }
-    (out, hidden)
+    (out, hidden, truncated)
 }
 
 /// `minecraft:wheat[age=7]` 的属性表。
@@ -438,12 +445,19 @@ fn net_line(host: &dyn ClientHost, line: &NetLine) -> String {
     tr(host, &line.key, &args)
 }
 
+/// 服务端行参数：`#lit:` 原样文本；`#ticks:N` 时间；`#tr:` 后是以 U+001F 分隔的片段，
+/// `@键` 片段翻译、其余原样，用空格连接；没有标签的一律原样显示（不会被当翻译键）。
 fn arg(host: &dyn ClientHost, a: &str) -> String {
-    if a.starts_with('@') {
-        // 一个参数可由空格连接多段：`@effect.x.speed @enchantment.level.2`；以 `@` 开头的段翻译，其余原样。
-        a.split(' ').map(|part| part.strip_prefix('@').map_or_else(|| part.to_owned(), |key| translated(host, key))).collect::<Vec<_>>().join(" ")
+    if let Some(text) = a.strip_prefix("#lit:") {
+        text.to_owned()
     } else if let Some(t) = a.strip_prefix("#ticks:") {
         duration(host, t.parse().unwrap_or(0))
+    } else if let Some(parts) = a.strip_prefix("#tr:") {
+        parts
+            .split('\u{1f}')
+            .map(|part| part.strip_prefix('@').map_or_else(|| part.to_owned(), |key| translated(host, key)))
+            .collect::<Vec<_>>()
+            .join(" ")
     } else {
         a.to_owned()
     }
@@ -587,6 +601,19 @@ mod tests {
     }
 
     #[test]
+    fn breaking_matches_block_pos_conversion() {
+        // 准星命中经 block_pos 换算，与预测的 [i32; 3] 坐标比较；负坐标同样成立。
+        for p in [[-1, 64, -30], [0, -60, 0], [123, 319, -7]] {
+            let pos = mod_api::BlockPos { x: p[0], y: p[1], z: p[2] };
+            assert_eq!(block_pos(&pos), p);
+            let mining = Mining { pos: Some(p), progress: 0.5, tick: 1 };
+            assert_eq!(breaking(Some(block_pos(&pos)), &mining, 1), Some(0.5));
+            let other = mod_api::BlockPos { x: p[0] + 1, ..pos };
+            assert_eq!(breaking(Some(block_pos(&other)), &mining, 1), None);
+        }
+    }
+
+    #[test]
     fn breaking_hides_zero_and_complete() {
         for progress in [0.0, 1.0] {
             let mining = Mining { pos: Some([0, 150, 3]), progress, tick: 10 };
@@ -608,17 +635,24 @@ mod tests {
     #[test]
     fn compact_limits_item_rows_to_one() {
         let one = vec![(Row::Items(vec![]), None)];
-        assert_eq!(visible_rows(one.clone(), false), (vec![Row::Items(vec![])], false));
-        assert_eq!(visible_rows(one, true), (vec![Row::Items(vec![])], false));
+        assert_eq!(visible_rows(one.clone(), false), (vec![Row::Items(vec![])], false, false));
+        assert_eq!(visible_rows(one, true), (vec![Row::Items(vec![])], false, false));
 
         let seven: Vec<_> = (0..7).map(|_| (Row::Items(vec![]), None)).collect();
-        let (compact, hidden) = visible_rows(seven.clone(), false);
+        let (compact, hidden, truncated) = visible_rows(seven.clone(), false);
         assert_eq!(compact.len(), 1);
         assert!(hidden);
+        assert!(truncated);
 
-        let (detail, hidden) = visible_rows(seven, true);
+        let (detail, hidden, truncated) = visible_rows(seven, true);
         assert_eq!(detail.len(), 6);
         assert!(!hidden);
+        assert!(truncated);
+
+        // 恰好 6 行：详细模式放得下，不提示截断。
+        let six: Vec<_> = (0..6).map(|_| (Row::Items(vec![]), None)).collect();
+        let (_, hidden, truncated) = visible_rows(six, true);
+        assert!(!hidden && !truncated);
     }
 
     #[test]
@@ -631,14 +665,14 @@ mod tests {
             (Row::Line("Breeding CD: In Love".into(), GRAY), Some("jade.mobbreeding.fed")),
             (Row::Line("Next egg: 5m".into(), GRAY), Some("jade.nextEgg")),
         ];
-        let (compact, hidden) = visible_rows(rows.clone(), false);
+        let (compact, hidden, _) = visible_rows(rows.clone(), false);
         assert_eq!(
             compact,
             vec![Row::Health(10.0, 10.0), Row::Line("Bees: 3".into(), GRAY)]
         );
         assert!(hidden);
 
-        let (detail, hidden) = visible_rows(rows, true);
+        let (detail, hidden, _) = visible_rows(rows, true);
         assert_eq!(detail.len(), 6);
         assert!(!hidden);
     }

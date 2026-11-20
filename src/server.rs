@@ -67,7 +67,7 @@ pub fn collect(host: &mut dyn ServerHost, player: PlayerRef, target: &NetTarget)
                 living_lines(host, entity, living, &kind, &mut data);
             }
             if let Some(item) = host.item_entity(entity).and_then(|e| e.stack(&*host)) {
-                data.items.push(NetItem { id: item.item().id(&*host), count: item.count().min(i32::MAX as u32) as i32 });
+                data.items.push(NetItem { id: item.item().id(&*host), count: clamp_count(item.count()) });
             }
             let nbt = entity.nbt(host).unwrap_or_default();
             entity_data(&kind, &nbt, &mut data);
@@ -133,7 +133,7 @@ fn block_entity(
                 .or_else(|| cpath(nbt, &["spawn_data", "entity", "id"]))
                 .and_then(tag_str)
             {
-                data.lines.push(line("jade.spawner", [format!("@block.{}", kind.replace(':', ".")), format!("@{}", entity_key(&id))]));
+                data.lines.push(line("jade.spawner", [tr_arg(&[&format!("block.{}", kind.replace(':', "."))]), tr_arg(&[&entity_key(&id)])]));
             }
             let delay = int_any(nbt, &["Delay"]);
             if delay > 0 {
@@ -186,7 +186,7 @@ fn storage_items(host: &mut dyn ServerHost, level: mod_api::LevelRef, pos: [i32;
         let next = storage.page(host, cursor, &mut page);
         for (resource, amount) in page.entries() {
             let id = resource.item().id(&*host);
-            out.push(NetItem { id, count: (*amount).min(i32::MAX as u64) as i32 });
+            out.push(NetItem { id, count: clamp_count(*amount) });
         }
         match next {
             Ok(Some(n)) => cursor = n,
@@ -223,7 +223,7 @@ fn entity_data(kind: &str, nbt: &Compound, data: &mut ServerData) {
         }
         "minecraft:painting" => {
             if let Some(variant) = cget(nbt, "variant").and_then(tag_str) {
-                data.lines.push(line("jade.horizon.painting", [format!("@{}", painting_key(&variant))]));
+                data.lines.push(line("jade.horizon.painting", [tr_arg(&[&painting_key(&variant)])]));
             }
         }
         _ => {}
@@ -254,21 +254,37 @@ fn living_lines(host: &mut dyn ServerHost, entity: mod_api::EntityRef, living: m
         }
     }
     if let Some(owner) = living.owner(&*host) {
-        let name = host.player(owner).and_then(|p| p.name(&*host)).unwrap_or_else(|| short_uuid(owner));
-        data.lines.push(line("jade.owner", [name]));
+        // 在线就记下名字；主人离线时用最近见过的名字，都没有才退回 UUID 前 8 位。
+        let name = match host.player(owner).and_then(|p| p.name(&*host)) {
+            Some(name) => {
+                remember_name(owner, &name);
+                name
+            }
+            None => known_name(owner).unwrap_or_else(|| short_uuid(owner)),
+        };
+        data.lines.push(line("jade.owner", [lit(&name)]));
     }
     if kind == "minecraft:armor_stand" {
         let items = mod_api::EquipmentSlot::ALL
             .into_iter()
             .filter_map(|slot| living.equipment(&*host, slot))
-            .map(|stack| NetItem { id: stack.item().id(&*host), count: stack.count().min(i32::MAX as u32) as i32 })
+            .map(|stack| NetItem { id: stack.item().id(&*host), count: clamp_count(stack.count()) })
             .collect();
         data.items.extend(merge(items));
     }
 }
 
 /// 有速度与跳跃力属性、值得显示的坐骑。
-const HORSES: &[&str] = &["minecraft:horse", "minecraft:donkey", "minecraft:mule", "minecraft:skeleton_horse", "minecraft:zombie_horse"];
+const HORSES: &[&str] = &[
+    "minecraft:horse",
+    "minecraft:donkey",
+    "minecraft:mule",
+    "minecraft:skeleton_horse",
+    "minecraft:zombie_horse",
+    "minecraft:llama",
+    "minecraft:trader_llama",
+    "minecraft:camel",
+];
 
 /// 移动速度属性 → 格/秒。
 pub fn horse_speed_blocks(attribute: f64) -> f64 {
@@ -282,34 +298,36 @@ pub fn horse_jump_blocks(strength: f64) -> f64 {
 
 /// 药水效果一行：`jade.potion` = `名称 等级` + 剩余时间；等级 1 不写；无限时长写"无限"。
 pub fn potion_line(id: &str, amplifier: i32, duration: i32) -> NetLine {
-    let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
+    let (ns, path) = split_id(id);
+    let effect = format!("effect.{ns}.{path}");
     let name = if amplifier <= 0 {
-        format!("@effect.{ns}.{path}")
+        tr_arg(&[&effect])
     } else if amplifier < 9 {
-        format!("@effect.{ns}.{path} @enchantment.level.{}", amplifier + 1)
+        tr_arg(&[&effect, &format!("enchantment.level.{}", amplifier + 1)])
     } else {
-        format!("@effect.{ns}.{path} {}", amplifier + 1)
+        // 9 级以上没有罗马数字翻译，直接写数字。
+        format!("#tr:@{effect}\u{1f}{}", amplifier + 1)
     };
-    let time = if duration < 0 { "@effect.duration.infinite".to_owned() } else { ticks_text(duration) };
+    let time = if duration < 0 { tr_arg(&["effect.duration.infinite"]) } else { ticks_text(duration) };
     line("jade.potion", [name, time])
 }
 
 /// 村民职业与等级：`entity.minecraft.villager.<职业> merchant.level.<等级>`。没有职业或无等级信息时按有的显示。
 pub fn profession_arg(profession: &str, level: Option<i32>) -> Option<String> {
-    let (ns, path) = profession.split_once(':').unwrap_or(("minecraft", profession));
+    let (ns, path) = split_id(profession);
     if path == "none" {
         return None;
     }
-    let mut out = format!("@entity.{ns}.villager.{path}");
-    if let Some(level) = level.filter(|l| (1..=5).contains(l)) {
-        out.push_str(&format!(" @merchant.level.{level}"));
-    }
-    Some(out)
+    let profession = format!("entity.{ns}.villager.{path}");
+    Some(match level.filter(|l| (1..=5).contains(l)) {
+        Some(level) => tr_arg(&[&profession, &format!("merchant.level.{level}")]),
+        None => tr_arg(&[&profession]),
+    })
 }
 
 /// 画的翻译键由游戏提供：`painting.<ns>.<path>.title`。
 pub fn painting_key(variant: &str) -> String {
-    let (ns, path) = variant.split_once(':').unwrap_or(("minecraft", variant));
+    let (ns, path) = split_id(variant);
     format!("painting.{ns}.{path}.title")
 }
 
@@ -419,12 +437,47 @@ fn merge(items: Vec<NetItem>) -> Vec<NetItem> {
 }
 
 fn entity_key(id: &str) -> String {
-    let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
+    let (ns, path) = split_id(id);
     format!("entity.{ns}.{path}")
 }
 
 fn line<const N: usize>(key: &str, args: [String; N]) -> NetLine {
     NetLine { key: key.to_owned(), args: args.into() }
+}
+
+/// `minecraft:x` 拆成 `(命名空间, 路径)`；没有命名空间按 minecraft。
+fn split_id(id: &str) -> (&str, &str) {
+    id.split_once(':').unwrap_or(("minecraft", id))
+}
+
+/// 物品数量压进线协议的 i32。
+fn clamp_count(count: impl Into<u64>) -> i32 {
+    count.into().min(i32::MAX as u64) as i32
+}
+
+/// 翻译键参数：各键翻译后用空格连接。参数由服务端明确标记，客户端不会把别的文本当键。
+fn tr_arg(keys: &[&str]) -> String {
+    let parts: Vec<String> = keys.iter().map(|k| format!("@{k}")).collect();
+    format!("#tr:{}", parts.join("\u{1f}"))
+}
+
+/// 原样显示的文本（玩家名等不可信内容），客户端不做任何翻译或解析。
+fn lit(text: &str) -> String {
+    format!("#lit:{text}")
+}
+
+/// 见过的玩家名（uuid → 名字），主人离线时用。进程内缓存，重启后重新积累。
+fn names() -> std::sync::MutexGuard<'static, std::collections::HashMap<u128, String>> {
+    static NAMES: OnceLock<Mutex<std::collections::HashMap<u128, String>>> = OnceLock::new();
+    NAMES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+pub fn remember_name(uuid: u128, name: &str) {
+    names().insert(uuid, name.to_owned());
+}
+
+fn known_name(uuid: u128) -> Option<String> {
+    names().get(&uuid).cloned()
 }
 
 /// tick 转成 Jade 的时间文本参数，客户端按 `jade.seconds` 等键格式化。
@@ -438,10 +491,38 @@ mod living_tests {
 
     #[test]
     fn potion_line_formats_level_and_time() {
-        assert_eq!(potion_line("minecraft:speed", 0, 600).args, ["@effect.minecraft.speed", "#ticks:600"]);
-        assert_eq!(potion_line("minecraft:speed", 1, 600).args[0], "@effect.minecraft.speed @enchantment.level.2");
-        assert_eq!(potion_line("minecraft:strength", 11, -1).args, ["@effect.minecraft.strength 12", "@effect.duration.infinite"]);
-        assert_eq!(potion_line("mod:x", 0, 20).args[0], "@effect.mod.x");
+        assert_eq!(potion_line("minecraft:speed", 0, 600).args, ["#tr:@effect.minecraft.speed", "#ticks:600"]);
+        assert_eq!(potion_line("minecraft:speed", 1, 600).args[0], "#tr:@effect.minecraft.speed\u{1f}@enchantment.level.2");
+        assert_eq!(potion_line("minecraft:strength", 11, -1).args, ["#tr:@effect.minecraft.strength\u{1f}12", "#tr:@effect.duration.infinite"]);
+        assert_eq!(potion_line("mod:x", 0, 20).args[0], "#tr:@effect.mod.x");
+    }
+
+    #[test]
+    fn potion_args_match_lang_order() {
+        // jade.potion = "%s (%s)"：第 1 个是名称与等级，第 2 个是剩余时间。
+        let line = potion_line("minecraft:speed", 1, 600);
+        assert_eq!(line.key, "jade.potion");
+        assert_eq!(line.args.len(), 2);
+        assert!(line.args[0].starts_with("#tr:@effect."));
+        assert!(line.args[1].starts_with("#ticks:"));
+        let lang = include_str!("../assets/jade/lang/en_us.json");
+        assert!(lang.contains("\"jade.potion\": \"%s (%s)\""));
+    }
+
+    #[test]
+    fn owner_names_are_literal_and_cached() {
+        assert_eq!(lit("@a #ticks:5"), "#lit:@a #ticks:5");
+        remember_name(42, "Alex");
+        assert_eq!(known_name(42).as_deref(), Some("Alex"));
+        assert_eq!(known_name(43), None);
+    }
+
+    #[test]
+    fn clamp_and_split() {
+        assert_eq!(clamp_count(5u32), 5);
+        assert_eq!(clamp_count(u64::MAX), i32::MAX);
+        assert_eq!(split_id("mod:x"), ("mod", "x"));
+        assert_eq!(split_id("x"), ("minecraft", "x"));
     }
 
     #[test]
@@ -455,8 +536,8 @@ mod living_tests {
     #[test]
     fn profession_hides_none_and_bad_levels() {
         assert_eq!(profession_arg("minecraft:none", Some(1)), None);
-        assert_eq!(profession_arg("minecraft:librarian", Some(2)).unwrap(), "@entity.minecraft.villager.librarian @merchant.level.2");
-        assert_eq!(profession_arg("minecraft:farmer", None).unwrap(), "@entity.minecraft.villager.farmer");
+        assert_eq!(profession_arg("minecraft:librarian", Some(2)).unwrap(), "#tr:@entity.minecraft.villager.librarian\u{1f}@merchant.level.2");
+        assert_eq!(profession_arg("minecraft:farmer", None).unwrap(), "#tr:@entity.minecraft.villager.farmer");
     }
 
     #[test]

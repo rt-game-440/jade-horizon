@@ -249,6 +249,7 @@
 	"jade.horizon.note_block": "%s (%s)",
 	"jade.horizon.painting": "Painting: %s",
 	"jade.horizon.shift_for_more": "Hold Shift for more",
+	"jade.horizon.more_items": "Container has more items",
 	"jade.beehive.bees": "Bees: %s",
 	"jade.beehive.honey": "Honey: %s",
 	"config.jade.plugin_minecraft.note_block": "Note Block",
