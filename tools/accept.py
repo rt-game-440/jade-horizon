@@ -206,6 +206,32 @@ SCENES = [
         look=block(0, Y + 1, 3),
         actions=["give minecraft:wooden_shovel", "select minecraft:wooden_shovel", "wait 0.5"],
     ),
+    # 挖掘进度：生存模式按住左键挖黑曜石（木镐要 37 秒），进度条稳定在很低的百分比。
+    scene(
+        "mining",
+        setup=[f"setblock 0 {Y + 1} 3 minecraft:obsidian", "gamemode survival Alice"],
+        look=block(0, Y + 1, 3),
+        actions=[
+            "give minecraft:wooden_pickaxe",
+            "select minecraft:wooden_pickaxe",
+            "mouse left down",
+            "wait 3.0",
+        ],
+    ),
+    # 松开之后进度条要消失。
+    scene(
+        "mining_stopped",
+        setup=[f"setblock 0 {Y + 1} 3 minecraft:obsidian", "gamemode survival Alice"],
+        look=block(0, Y + 1, 3),
+        actions=[
+            "give minecraft:wooden_pickaxe",
+            "select minecraft:wooden_pickaxe",
+            "mouse left down",
+            "wait 0.6",
+            "mouse left up",
+            "wait 0.4",
+        ],
+    ),
     # 流体：在地板上挖一格做水池，四周都是石头，液体不会流走。
     scene("water", setup=[f"setblock 0 {Y} 2 water"], look=point(0, Y, 2)),
     scene("lava", setup=[f"setblock 0 {Y} 2 lava"], look=point(0, Y, 2)),

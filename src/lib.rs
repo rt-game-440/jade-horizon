@@ -62,6 +62,15 @@ impl Hooks for Jade {
         let _ = TO_CLIENT.set(to_client);
     }
 
+    fn client_mining_predict(
+        &self,
+        _host: &dyn ClientHost,
+        event: &mut mod_api::ClientMiningPredictEvent,
+    ) -> mod_api::Flow {
+        client::record_mining(&event.prediction);
+        mod_api::Flow::Continue
+    }
+
     fn client_tick_post(&self, host: &mut dyn ClientHost, _event: &mut ClientTickPostEvent) {
         if let Some(request) = client::tick(host) {
             if let Some(token) = TO_SERVER.get() {

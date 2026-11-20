@@ -54,13 +54,15 @@ pub fn draw(draw: &mut dyn DrawContext, tip: &Tooltip) {
     }
     let content_h = height.max(if tip.icon.is_some() { 16.0 } else { 0.0 });
     let w = (width + icon_w + PAD * 2.0).ceil();
-    let h = (content_h + PAD * 2.0 - 2.0).ceil();
+    // 有破坏进度时底部多留 2px 画进度条。
+    let extra = if tip.breaking.is_some() { BREAK_H } else { 0.0 };
+    let h = (content_h + PAD * 2.0 - 2.0 + extra).ceil();
     let x = ((screen_w - w) / 2.0).floor();
     let y = 4.0;
     background(draw, [x, y, w, h]);
 
     if let Some(icon) = tip.icon {
-        let iy = y + (h - 16.0) / 2.0;
+        let iy = y + (h - extra - 16.0) / 2.0;
         draw.item(icon, [x + PAD, iy.floor()], 16.0);
     }
     let tx = x + PAD + icon_w;
@@ -72,6 +74,25 @@ pub fn draw(draw: &mut dyn DrawContext, tip: &Tooltip) {
         ty += row_height(row);
     }
     draw.text(&tip.mod_name, [tx, ty], MOD_NAME, true);
+    if let Some(progress) = tip.breaking {
+        break_bar(draw, [x, y, w, h], progress);
+    }
+}
+
+/// 破坏进度条的高度。
+const BREAK_H: f32 = 2.0;
+const BREAK_TRACK: u32 = 0xFF55_5555;
+const BREAK_FILL: u32 = 0xFFFF_FFFF;
+
+/// 提示框底部的破坏进度：1px 的槽 + 1px 的已完成部分，左右各留 1px 不压边框。
+fn break_bar(draw: &mut dyn DrawContext, [x, y, w, h]: [f32; 4], progress: f32) {
+    let width = (w - 2.0).max(0.0);
+    let top = y + h - BREAK_H;
+    draw.fill([x + 1.0, top, width, 1.0], BREAK_TRACK);
+    let filled = (width * progress.clamp(0.0, 1.0)).round().min(width);
+    if filled > 0.0 {
+        draw.fill([x + 1.0, top, filled, 1.0], BREAK_FILL);
+    }
 }
 
 /// 原版 tooltip 的背景：深色底加紫色渐变边框。

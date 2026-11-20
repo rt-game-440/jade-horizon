@@ -31,10 +31,16 @@ pub struct Tooltip {
     pub title: String,
     pub rows: Vec<Row>,
     pub mod_name: String,
+    /// 正在挖这个方块时的破坏进度 0..1，画成提示框底部的一条进度条。
+    pub breaking: Option<f32>,
 }
 
 #[derive(Default)]
 struct State {
+    /// 客户端 tick 计数，用来判断挖掘记录是不是最新的。
+    tick: u32,
+    /// 最近一次挖掘预测。
+    mining: Mining,
     target: Option<NetTarget>,
     /// 当前目标收到过的服务端数据。
     server: Option<ServerData>,
@@ -79,6 +85,23 @@ pub fn current() -> Option<Tooltip> {
 /// 换目标时不等这个间隔，立即请求。
 pub const REQUEST_INTERVAL: u32 = 10;
 
+/// 最近一次客户端挖掘预测：正在挖哪个方块、进度多少、记在第几 tick。
+#[derive(Clone, Copy, Debug, Default)]
+struct Mining {
+    pos: Option<[i32; 3]>,
+    progress: f32,
+    tick: u32,
+}
+
+/// 挖掘预测只在这个 tick 数内算“正在挖”；松手后残留的记录会被丢掉。
+const MINING_STALE_TICKS: u32 = 2;
+
+/// 客户端每 tick 的挖掘预测（`client_mining_predict` 钩子调用）。
+pub fn record_mining(prediction: &mod_api::ClientMiningPrediction) {
+    let mut st = lock(state());
+    st.mining = Mining { pos: Some(prediction.pos), progress: prediction.progress, tick: st.tick };
+}
+
 /// 每个客户端 tick 调用：更新目标，返回需要发送的请求。
 pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
     let fluid = fluid_target(host);
@@ -86,8 +109,9 @@ pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
     let target = if fluid.is_some() { None } else { host.crosshair_target() };
     let net = target.as_ref().and_then(net_target);
     // 先在锁内更新目标、取出服务端数据，放锁后再读宿主组装提示框。
-    let (server, request) = {
+    let (server, request, mining, tick) = {
         let mut st = lock(state());
+        st.tick += 1;
         let changed = st.target != net;
         if changed {
             st.target = net.clone();
@@ -98,15 +122,37 @@ pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
             st.ticks_since_request = ticks;
             send.then_some(Request { target, fresh: changed })
         });
-        (st.server.clone(), request)
+        (st.server.clone(), request, st.mining, st.tick)
     };
     let detail = shift_down(host);
-    let tooltip = match &fluid {
+    let mut tooltip = match &fluid {
         Some(fluid) => Some(fluid_tooltip(host, fluid)),
         None => target.as_ref().and_then(|t| build(host, t, server.as_ref(), detail)),
     };
+    if let Some(tip) = tooltip.as_mut() {
+        tip.breaking = breaking(target_pos(&target), &mining, tick);
+    }
     lock(state()).tooltip = tooltip;
     request
+}
+
+/// 准星命中的方块坐标；对准实体或什么也没有时为 None。
+fn target_pos(target: &Option<CrosshairTarget>) -> Option<[i32; 3]> {
+    match target {
+        Some(CrosshairTarget::Block { pos, .. }) => Some(block_pos(pos)),
+        _ => None,
+    }
+}
+
+/// 正在挖准星对着的方块时给出破坏进度；换目标或松手后（记录过期）就不给了。
+fn breaking(target: Option<[i32; 3]>, mining: &Mining, tick: u32) -> Option<f32> {
+    if target? != mining.pos? {
+        return None;
+    }
+    if tick.saturating_sub(mining.tick) > MINING_STALE_TICKS {
+        return None;
+    }
+    (mining.progress > 0.0 && mining.progress < 1.0).then_some(mining.progress)
 }
 
 /// 视线上的流体；准星命中的实体比流体近时不显示流体。
@@ -129,6 +175,7 @@ fn fluid_tooltip(host: &dyn ClientHost, fluid: &crate::fluid::Fluid) -> Tooltip 
         title: block_name(host, &fluid.id),
         rows: Vec::new(),
         mod_name: mod_name(host, &namespace),
+        breaking: None,
     }
 }
 
@@ -513,6 +560,30 @@ mod tests {
         assert_eq!(sent, vec![0, 10, 20]);
         // 中途换目标立即发并重新计时。
         assert_eq!(schedule(true, 3), (true, 0));
+    }
+
+    #[test]
+    fn breaking_follows_the_crosshair_and_fresh_predictions() {
+        let mining = Mining { pos: Some([0, 150, 3]), progress: 0.4, tick: 10 };
+        assert_eq!(breaking(Some([0, 150, 3]), &mining, 10), Some(0.4));
+        // 记录两 tick 内仍算在挖。
+        assert_eq!(breaking(Some([0, 150, 3]), &mining, 12), Some(0.4));
+        // 过期（松手后）就不显示了。
+        assert_eq!(breaking(Some([0, 150, 3]), &mining, 13), None);
+        // 准星换到别的方块也不显示。
+        assert_eq!(breaking(Some([0, 150, 4]), &mining, 10), None);
+        // 没对准任何东西同理。
+        assert_eq!(breaking(None, &mining, 10), None);
+    }
+
+    #[test]
+    fn breaking_hides_zero_and_complete() {
+        for progress in [0.0, 1.0] {
+            let mining = Mining { pos: Some([0, 150, 3]), progress, tick: 10 };
+            assert_eq!(breaking(Some([0, 150, 3]), &mining, 10), None, "progress={progress}");
+        }
+        let mining = Mining { pos: Some([0, 150, 3]), progress: 0.99, tick: 10 };
+        assert_eq!(breaking(Some([0, 150, 3]), &mining, 10), Some(0.99));
     }
 
     #[test]
