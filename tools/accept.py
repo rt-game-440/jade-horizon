@@ -172,6 +172,26 @@ SCENES = [
         setup=[f"summon minecraft:husk 2.5 {Y + 1} -2.5 {{NoAI:1b,Health:13f,PersistenceRequired:1b}}"],
         look=entity("minecraft:husk"),
     ),
+    # 挖掘信息：石头上用铁镐（能采集），黑曜石用木镐（需要钻石镐，采不下来），
+    # 泥土不需要正确工具（这一行不显示）。
+    scene(
+        "harvest_stone",
+        setup=[f"setblock 0 {Y + 1} 3 minecraft:stone"],
+        look=block(0, Y + 1, 3),
+        actions=["give minecraft:iron_pickaxe", "select minecraft:iron_pickaxe", "wait 0.5"],
+    ),
+    scene(
+        "harvest_obsidian",
+        setup=[f"setblock 0 {Y + 1} 3 minecraft:obsidian"],
+        look=block(0, Y + 1, 3),
+        actions=["give minecraft:wooden_pickaxe", "select minecraft:wooden_pickaxe", "wait 0.5"],
+    ),
+    scene(
+        "harvest_dirt",
+        setup=[f"setblock 0 {Y + 1} 3 minecraft:dirt"],
+        look=block(0, Y + 1, 3),
+        actions=["give minecraft:wooden_shovel", "select minecraft:wooden_shovel", "wait 0.5"],
+    ),
 ]
 
 # 截图前一刻 /tick freeze，截完立即 /tick unfreeze。
@@ -311,6 +331,8 @@ def reset(srv):
     srv("cmd", "time set 6000")
     srv("cmd", "weather clear")
     srv("cmd", "kill @e[type=!player]")
+    # 手上的工具也清掉：挖掘信息的场景会往快捷栏放镐子。
+    srv("cmd", f"clear {CLIENT}")
     # 地面也重铺一次：上一个场景可能把地板换成了耕地之类。
     srv("cmd", FLOOR)
     srv("cmd", CLEAR)
@@ -352,6 +374,8 @@ def capture(ctl, srv, sc, out, r, freeze):
     for action in sc["actions"]:
         if action.startswith("wait "):
             time.sleep(float(action.split(None, 1)[1]))
+        elif action.startswith("command "):
+            ctl("command", action.split(None, 1)[1], timeout=30)
         else:
             ctl(*action.split(), timeout=30)
     # 按住 Shift 会潜行、视角变低，要重新对准一次。

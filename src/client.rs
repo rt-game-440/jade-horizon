@@ -20,6 +20,8 @@ pub enum Row {
     Items(Vec<(ItemKey, i32)>),
     /// 输入物品 → 进度箭头 → 输出物品。
     Progress { inputs: Vec<(ItemKey, i32)>, outputs: Vec<(ItemKey, i32)>, fraction: f32 },
+    /// 需要的工具与能不能采集：工具图标 + ✔/✘。
+    Harvest { tool: Option<ItemKey>, ok: bool },
 }
 
 /// 当前要画的提示框。
@@ -171,6 +173,9 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
             tip.title = block_name(host, &id);
             let props = properties(host, *state);
             let mut plain = Vec::new();
+            if let Some(harvest) = crate::harvest::of(host, *state) {
+                plain.push(Row::Harvest { tool: harvest.tool, ok: harvest.ok });
+            }
             block_rows(host, &id, &props, &mut plain);
             rows.extend(plain.into_iter().map(|r| (r, None)));
         }
