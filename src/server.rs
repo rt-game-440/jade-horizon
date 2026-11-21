@@ -388,6 +388,24 @@ fn entity_data(kind: &str, nbt: &Compound, data: &mut ServerData) {
                 data.lines.push(line("jade.horizon.pet_armor", [tr_arg(&[&format!("item.{ns}.{path}")])]));
             }
         }
+        "minecraft:falling_block" => {
+            let name = cpath(nbt, &["BlockState", "Name"])
+                .and_then(tag_str)
+                .or_else(|| cget(nbt, "BlockState").and_then(tag_str).map(|s| s.split('[').next().unwrap_or_default().to_owned()));
+            if let Some(name) = name {
+                data.lines.push(line("jade.horizon.shown", [id_arg(&name)]));
+            }
+        }
+        "minecraft:block_display" => {
+            if let Some(name) = cpath(nbt, &["block_state", "Name"]).and_then(tag_str) {
+                data.lines.push(line("jade.horizon.shown", [id_arg(&name)]));
+            }
+        }
+        "minecraft:item_display" => {
+            if let Some(item) = cget(nbt, "item").and_then(item_of) {
+                data.lines.push(line("jade.horizon.shown", [id_arg(&item.id)]));
+            }
+        }
         "minecraft:painting" => {
             if let Some(variant) = cget(nbt, "variant").and_then(tag_str) {
                 data.lines.push(line("jade.horizon.painting", [tr_arg(&[&painting_key(&variant)])]));
@@ -634,6 +652,11 @@ fn clamp_count(count: impl Into<u64>) -> i32 {
 fn tr_arg(keys: &[&str]) -> String {
     let parts: Vec<String> = keys.iter().map(|k| format!("@{k}")).collect();
     format!("#tr:{}", parts.join("\u{1f}"))
+}
+
+/// 方块或物品 id：客户端按方块、物品的顺序找本地化名称。
+fn id_arg(id: &str) -> String {
+    format!("#id:{id}")
 }
 
 /// 原样显示的文本（玩家名等不可信内容），客户端不做任何翻译或解析。

@@ -41,6 +41,9 @@ pub enum Feature {
     PlayerHead,
     Sign,
     CommandBlock,
+    Hopper,
+    Enchant,
+    Display,
 }
 
 /// 注册的按键：id、默认键（与 Jade 一致，都在小键盘）、标签的翻译键。
@@ -77,6 +80,9 @@ const FEATURES: &[(Feature, &str, &str, bool)] = &[
     (Feature::PlayerHead, "show_player_head", "config.jade.plugin_minecraft.player_head", true),
     (Feature::Sign, "show_sign", "config.jade.plugin_jade_access.sign", true),
     (Feature::CommandBlock, "show_command_block", "config.jade.plugin_minecraft.command_block", true),
+    (Feature::Hopper, "show_hopper", "config.jade.horizon.hopper", true),
+    (Feature::Enchant, "show_enchant", "config.jade.plugin_minecraft.enchantment_power", true),
+    (Feature::Display, "show_display", "config.jade.horizon.display", true),
 ];
 
 /// 提示框锚在屏幕的哪里。

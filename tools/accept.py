@@ -520,6 +520,31 @@ SCENES = [
         look=block(-3, Y + 1, 0),
         settings={"theme": 4, "custom_border": "#ff8800", "custom_title": "#55ff55", "custom_accent": "#ffaa00"},
     ),
+    # ---- #32：方块与实体补充信息 ----
+    scene(
+        "hopper_locked",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:hopper", f"setblock -3 {Y + 1} 1 minecraft:redstone_block"],
+        look=block(-3, Y + 1, 0),
+    ),
+    scene(
+        "enchant_power",
+        setup=[
+            f"setblock -3 {Y + 1} 0 minecraft:enchanting_table",
+            f"fill -5 {Y + 1} 0 -5 {Y + 2} 0 minecraft:bookshelf",
+            f"setblock -5 {Y + 1} 1 minecraft:bookshelf",
+        ],
+        look=block(-3, Y + 1, 0),
+    ),
+    scene(
+        "shelf",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:oak_shelf[facing=east]{{Items:[{{Slot:0,id:\"minecraft:book\",count:3}},{{Slot:1,id:\"minecraft:diamond\",count:1}}]}}"],
+        look=block(-3, Y + 1, 0),
+    ),
+    scene(
+        "falling_block",
+        setup=[f'summon minecraft:falling_block -2.5 {Y + 1} 0.5 {{BlockState:{{Name:"minecraft:sand"}},NoGravity:1b,Time:1}}'],
+        look=point(-3, Y + 1, 0),
+    ),
     # mod 安装组合（#19）：试过“只装客户端”“只装服务端”，Horizon 的 mod 握手都直接拒绝进服
     # （Your mods don't match this server's），side = "both" 的 mod 没法做这两种组合，所以没有对应场景。
 ]

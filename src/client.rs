@@ -182,7 +182,8 @@ pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
         return None;
     }
     // 掉落物原版瞄不到，自己做射线；它比准星命中的东西近时，当作准星命中的实体。
-    let dropped = if cfg.has(Feature::Dropped) { crate::dropped::target(host) } else { None };
+    let (items, shown) = (cfg.has(Feature::Dropped), cfg.has(Feature::Display));
+    let dropped = if items || shown { crate::dropped::target(host, items, shown) } else { None };
     let fluid = if dropped.is_some() || !cfg.has(Feature::Fluid) || liquid_off { None } else { fluid_target(host) };
     // 隐藏列表里的方块、实体、流体当作没瞄准任何东西：不组装提示框，也不向服务端请求。
     let hide = crate::hide::current(host);
@@ -332,7 +333,7 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
     let mut rows: Vec<Entry> = Vec::new();
     let namespace;
     match target {
-        CrosshairTarget::Block { state, hit, .. } => {
+        CrosshairTarget::Block { pos, state, hit } => {
             let block = state.block();
             let id = block.id(host);
             if id == "minecraft:air" {
@@ -346,6 +347,11 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
                 rows.push(entry(Row::Harvest { tool: harvest.tool, ok: harvest.ok }, Feature::Harvest));
             }
             block_rows(host, &id, &props, &mut rows);
+            if id == "minecraft:enchanting_table" {
+                if let Some(power) = enchant_power(host, block_pos(pos)) {
+                    rows.push(entry(Row::Line(tr(host, "jade.ench_power", &[power.to_string()]), Tone::Normal), Feature::Enchant));
+                }
+            }
             if let Some(name) = face_name(hit.face) {
                 let face = translated(host, name);
                 rows.push(entry(Row::Line(tr(host, "jade.horizon.block_face", &[face]), Tone::Normal), Feature::BlockFace));
@@ -500,6 +506,12 @@ fn block_rows(host: &dyn ClientHost, id: &str, props: &HashMap<String, String>, 
                 rows.push(entry(Row::Line(text, Tone::Normal), Feature::Always));
             }
         }
+        "hopper" => {
+            // 被红石信号锁住时 enabled=false，漏斗不再转移物品。
+            if prop("enabled") == Some("false") {
+                rows.push(entry(Row::Line(tr(host, "jade.locked", &[]), Tone::Warn), Feature::Hopper));
+            }
+        }
         "tnt" => {
             if prop("unstable") == Some("true") {
                 rows.push(entry(Row::Line(tr(host, "jade.tnt.unstable", &[]), Tone::Warn), Feature::Always));
@@ -512,6 +524,31 @@ fn block_rows(host: &dyn ClientHost, id: &str, props: &HashMap<String, String>, 
             rows.push(entry(Row::Line(tr(host, "tooltip.jade.power", &[power.to_owned()]), Tone::Normal), Feature::Redstone));
         }
     }
+}
+
+/// 书架之间“空隙”的偏移：附魔台周围一圈（距离 2）的书架，需要台与书架之间的格子是空气才算数。
+/// 返回的是原版书架数 * 1（上限 15）；只认 `minecraft:bookshelf`，模组的能量方块无法按标签判断。
+fn enchant_power(host: &dyn ClientHost, table: [i32; 3]) -> Option<u32> {
+    let level = host.local_player()?.level(host)?;
+    let id_at = |p: [i32; 3]| level.block_state(host, p).map(|s| s.block().id(host));
+    let mut power = 0;
+    for dx in -2..=2_i32 {
+        for dz in -2..=2_i32 {
+            if dx.abs() != 2 && dz.abs() != 2 {
+                continue;
+            }
+            for dy in 0..=1 {
+                let gap = [table[0] + dx / 2, table[1] + dy, table[2] + dz / 2];
+                if id_at(gap)? != "minecraft:air" {
+                    continue;
+                }
+                if id_at([table[0] + dx, table[1] + dy, table[2] + dz])? == "minecraft:bookshelf" {
+                    power += 1;
+                }
+            }
+        }
+    }
+    Some(power.min(15))
 }
 
 fn crop_max_age(path: &str) -> Option<u32> {
@@ -598,6 +635,7 @@ fn line_feature(key: &str) -> Feature {
         "tooltip.jade.villager_profession" => Feature::Villager,
         k if k.starts_with("jade.horseStat.") => Feature::Horse,
         "jade.horizon.waxed" => Feature::Waxed,
+        "jade.horizon.shown" => Feature::Display,
         "jade.zombieConversion.time" => Feature::ZombieVillager,
         "jade.villagerRestock.ready" => Feature::Restock,
         "jade.horizon.pet_armor" => Feature::PetArmor,
@@ -622,6 +660,8 @@ fn net_line(host: &dyn ClientHost, line: &NetLine) -> String {
 fn arg(host: &dyn ClientHost, a: &str) -> String {
     if let Some(text) = a.strip_prefix("#lit:") {
         text.to_owned()
+    } else if let Some(id) = a.strip_prefix("#id:") {
+        block_name(host, id)
     } else if let Some(t) = a.strip_prefix("#ticks:") {
         duration(host, t.parse().unwrap_or(0))
     } else if let Some(parts) = a.strip_prefix("#tr:") {

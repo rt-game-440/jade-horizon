@@ -24,8 +24,23 @@ pub fn ray_box(origin: [f64; 3], dir: [f64; 3], min: [f64; 3], max: [f64; 3]) ->
     Some(near)
 }
 
+/// 把过小的盒子以中心为准放大到每边至少 `MIN_SIDE` 格（掉落物 0.25 格不放大，只有展示实体这类零大小的才需要）。
+fn minimum_box(min: [f64; 3], max: [f64; 3]) -> ([f64; 3], [f64; 3]) {
+    const MIN_SIDE: f64 = 0.2;
+    let (mut lo, mut hi) = (min, max);
+    for axis in 0..3 {
+        if hi[axis] - lo[axis] < MIN_SIDE {
+            let mid = (lo[axis] + hi[axis]) / 2.0;
+            lo[axis] = mid - 0.5;
+            hi[axis] = mid + 0.5;
+        }
+    }
+    (lo, hi)
+}
+
 /// 视线上的掉落物，以“准星命中的实体”的形式返回，后续走实体提示框与服务端数据。
-pub fn target(host: &dyn ClientHost) -> Option<CrosshairTarget> {
+/// `items` 为真时认掉落物；`shown` 为真时认下落方块与展示实体（它们同样没有可被准星命中的碰撞箱）。
+pub fn target(host: &dyn ClientHost, items: bool, shown: bool) -> Option<CrosshairTarget> {
     let camera = host.camera()?;
     let level = host.local_player()?.level(host)?;
     let origin = eye(host).unwrap_or(camera.position);
@@ -47,9 +62,17 @@ pub fn target(host: &dyn ClientHost) -> Option<CrosshairTarget> {
     let low = [origin[0].min(end[0]) - pad, origin[1].min(end[1]) - pad, origin[2].min(end[2]) - pad];
     let high = [origin[0].max(end[0]) + pad, origin[1].max(end[1]) + pad, origin[2].max(end[2]) + pad];
     let mut best: Option<(f64, EntityRef)> = None;
-    let dropped_kind = |e: EntityRef| e.kind(host).is_some_and(|k| k.id(host) == "minecraft:item");
+    let wanted = |e: EntityRef| {
+        e.kind(host).is_some_and(|k| match k.id(host).as_str() {
+            "minecraft:item" => items,
+            "minecraft:falling_block" | "minecraft:block_display" | "minecraft:item_display" => shown,
+            _ => false,
+        })
+    };
     for entity in level.entities_in(host, low, high)? {
-        let Some([min, max]) = entity.bounding_box(host) else { continue };
+        let Some([min, max]) = entity.bounding_box(host).or_else(|| entity.position(host).map(|p| [p, p])) else { continue };
+        // 展示实体的碰撞箱可能是 0 大小：以中心为准放大成 1 格见方的盒子，保证瞄得到。
+        let (min, max) = minimum_box(min, max);
         // 实体盒放宽一点：掉落物的碰撞箱只有 0.25 格，原版也是按放宽后的盒子拾取瞄准。
         let grow = 0.1;
         let d = ray_box(
@@ -60,7 +83,7 @@ pub fn target(host: &dyn ClientHost) -> Option<CrosshairTarget> {
         );
         if let Some(d) = d.filter(|d| *d <= limit) {
             if best.as_ref().is_none_or(|(b, _)| d < *b) {
-                if dropped_kind(entity) {
+                if wanted(entity) {
                     best = Some((d, entity));
                 }
             }
@@ -82,6 +105,14 @@ mod tests {
         assert!((d - 2.0).abs() < 1e-9);
         assert!(ray_box(o, [0.0, 0.0, -1.0], [-0.5, -0.5, 2.0], [0.5, 0.5, 3.0]).is_none());
         assert!(ray_box(o, [0.0, 0.0, 1.0], [1.0, -0.5, 2.0], [2.0, 0.5, 3.0]).is_none());
+    }
+
+    #[test]
+    fn zero_sized_boxes_are_grown_around_their_center() {
+        let (lo, hi) = minimum_box([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]);
+        assert_eq!((lo, hi), ([0.5, 1.5, 2.5], [1.5, 2.5, 3.5]));
+        let boxed = ([0.0; 3], [0.25; 3]);
+        assert_eq!(minimum_box(boxed.0, boxed.1), boxed);
     }
 
     #[test]

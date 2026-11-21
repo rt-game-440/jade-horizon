@@ -54,6 +54,7 @@ Additionally shown when the server has it installed:
 - Beehive bee count, spawner mob and cooldown, jukebox disc, lectern book, item frame item
 - Baby mob growth time, breeding cooldown, love state, next egg time for chickens
 - Sign text and waxed state, the player name on a player head, a command block's command (only shown to players who may use command blocks)
+- Hopper lock, enchanting table bookshelf power (vanilla bookshelves only), falling block name
 - Zombie villager conversion time, villager "ready to restock" (a trade has been used), wolf and horse armor
 
 The server only answers for targets within 16 blocks in the same dimension. Both network packets are registered as optional (`optional()`) and carry a protocol version;
