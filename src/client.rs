@@ -60,7 +60,7 @@ pub struct Tooltip {
 #[derive(Default)]
 struct State {
     /// 客户端 tick 计数，用来判断挖掘记录是不是最新的。
-    tick: u32,
+    now: u32,
     /// 最近一次挖掘预测。
     mining: Mining,
     target: Option<NetTarget>,
@@ -136,7 +136,8 @@ pub const REQUEST_INTERVAL: u32 = 10;
 struct Mining {
     pos: Option<[i32; 3]>,
     progress: f32,
-    tick: u32,
+    /// 记录这次预测时的客户端 tick（`State.now`）。
+    recorded_at: u32,
 }
 
 /// 挖掘预测只在这个 tick 数内算“正在挖”；松手后残留的记录会被丢掉。
@@ -145,7 +146,7 @@ const MINING_STALE_TICKS: u32 = 2;
 /// 客户端每 tick 的挖掘预测（`client_mining_predict` 钩子调用）。
 pub fn record_mining(prediction: &mod_api::ClientMiningPrediction) {
     let mut st = lock(state());
-    st.mining = Mining { pos: Some(prediction.pos), progress: prediction.progress, tick: st.tick };
+    st.mining = Mining { pos: Some(prediction.pos), progress: prediction.progress, recorded_at: st.now };
 }
 
 /// 每个客户端 tick 调用：更新目标，返回需要发送的请求。
@@ -178,7 +179,7 @@ pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
     // 先在锁内更新目标、取出服务端数据，放锁后再读宿主组装提示框。
     let (server, request, mining, tick) = {
         let mut st = lock(state());
-        st.tick += 1;
+        st.now += 1;
         let changed = st.target != net;
         if changed {
             st.target = net.clone();
@@ -189,7 +190,7 @@ pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
             st.ticks_since_request = ticks;
             send.then_some(Request { target, fresh: changed })
         });
-        (st.server.clone(), request, st.mining, st.tick)
+        (st.server.clone(), request, st.mining, st.now)
     };
     let detail = shift_down(host);
     let mut tooltip = match &fluid {
@@ -217,11 +218,11 @@ fn target_pos(target: &Option<CrosshairTarget>) -> Option<[i32; 3]> {
 }
 
 /// 正在挖准星对着的方块时给出破坏进度；换目标或松手后（记录过期）就不给了。
-fn breaking(target: Option<[i32; 3]>, mining: &Mining, tick: u32) -> Option<f32> {
+fn breaking(target: Option<[i32; 3]>, mining: &Mining, now: u32) -> Option<f32> {
     if target? != mining.pos? {
         return None;
     }
-    if tick.saturating_sub(mining.tick) > MINING_STALE_TICKS {
+    if now.saturating_sub(mining.recorded_at) > MINING_STALE_TICKS {
         return None;
     }
     (mining.progress > 0.0 && mining.progress < 1.0).then_some(mining.progress)
@@ -232,7 +233,7 @@ fn fluid_target(host: &dyn ClientHost) -> Option<crate::fluid::Fluid> {
     let fluid = crate::fluid::target(host)?;
     let closer_entity = match host.crosshair_target() {
         Some(CrosshairTarget::Entity { point, .. }) => {
-            crate::fluid::eye(host).is_some_and(|eye| crate::fluid::distance(eye, point) <= fluid.distance)
+            crate::ray::eye(host).is_some_and(|eye| crate::ray::distance(eye, point) <= fluid.distance)
         }
         // 方块命中格本身不参与流体判定，能看到的流体一定在它之前。
         _ => false,
@@ -665,7 +666,7 @@ mod tests {
 
     #[test]
     fn breaking_follows_the_crosshair_and_fresh_predictions() {
-        let mining = Mining { pos: Some([0, 150, 3]), progress: 0.4, tick: 10 };
+        let mining = Mining { pos: Some([0, 150, 3]), progress: 0.4, recorded_at: 10 };
         assert_eq!(breaking(Some([0, 150, 3]), &mining, 10), Some(0.4));
         // 记录两 tick 内仍算在挖。
         assert_eq!(breaking(Some([0, 150, 3]), &mining, 12), Some(0.4));
@@ -683,7 +684,7 @@ mod tests {
         for p in [[-1, 64, -30], [0, -60, 0], [123, 319, -7]] {
             let pos = mod_api::BlockPos { x: p[0], y: p[1], z: p[2] };
             assert_eq!(block_pos(&pos), p);
-            let mining = Mining { pos: Some(p), progress: 0.5, tick: 1 };
+            let mining = Mining { pos: Some(p), progress: 0.5, recorded_at: 1 };
             assert_eq!(breaking(Some(block_pos(&pos)), &mining, 1), Some(0.5));
             let other = mod_api::BlockPos { x: p[0] + 1, ..pos };
             assert_eq!(breaking(Some(block_pos(&other)), &mining, 1), None);
@@ -693,10 +694,10 @@ mod tests {
     #[test]
     fn breaking_hides_zero_and_complete() {
         for progress in [0.0, 1.0] {
-            let mining = Mining { pos: Some([0, 150, 3]), progress, tick: 10 };
+            let mining = Mining { pos: Some([0, 150, 3]), progress, recorded_at: 10 };
             assert_eq!(breaking(Some([0, 150, 3]), &mining, 10), None, "progress={progress}");
         }
-        let mining = Mining { pos: Some([0, 150, 3]), progress: 0.99, tick: 10 };
+        let mining = Mining { pos: Some([0, 150, 3]), progress: 0.99, recorded_at: 10 };
         assert_eq!(breaking(Some([0, 150, 3]), &mining, 10), Some(0.99));
     }
 

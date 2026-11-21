@@ -5,6 +5,28 @@
 
 本项目不是 Snownee 的官方作品，也未获原作者背书。
 
+| 容器（服务端也装） | 熔炉进度 | 挖掘信息 | 生物 |
+| --- | --- | --- | --- |
+| ![箱子](tests/baselines/chest_more.png) | ![熔炉](tests/baselines/furnace.png) | ![挖掘](tests/baselines/harvest_iron_stone.png) | ![马](tests/baselines/horse.png) |
+
+## 兼容版本
+
+| Jade for Horizon | Horizon | SDK | mod API | Minecraft |
+| --- | --- | --- | --- | --- |
+| 0.1.0 | nightly-2026-11-19 | `5ef7734` | 0.2 | 26.3 |
+
+其他 Horizon 版本未测试。各版本改动见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 安装
+
+从 [Releases](https://github.com/rt-game-440/jade-horizon/releases) 下载 `jade.hmod`，放进游戏目录的 `horizon-mods/`，
+并在 `horizon-mods.txt` 里加一行 `mod.jade:true`。
+
+- 多人游戏：客户端装了就能用基础功能；服务端也装才会显示容器内容、熔炉进度等服务端数据。
+  manifest 里是 `side = "client"`，进服时 Horizon 不比对 jade，只装一边也能进服（专用服务端上已验收）。
+  代价是两端版本不同时游戏不会拒绝进服，协议版本不一致的一端会按“对方没装”处理，只显示客户端信息。
+- 单人游戏：装在客户端即可。内置服务端是否也加载 `side = "client"` 的包（决定能否看到容器内容等）尚未实测。
+
 ## 功能
 
 只装客户端即可：
@@ -23,8 +45,12 @@
 - 蜂巢蜜蜂数、刷怪笼生物与冷却、唱片机唱片、讲台书本、物品展示框物品
 - 幼年生物成长时间、繁殖冷却、求爱状态、鸡下一次下蛋时间
 
-服务端只回应 16 格内、同一维度的目标。本 mod 带内容（`side = "both"`），Horizon 的 mod 握手要求服务端和客户端装同一批 mod，
-只装一边的组合会被直接拒绝进服（`Your mods don't match this server's`），所以没有“只装客户端 / 只装服务端”的验收场景。
+服务端只回应 16 格内、同一维度的目标。两端的网络包都注册为可选（`optional()`），并带协议版本号，
+对方没装或版本不一致时视同没装，只显示客户端自己知道的信息。
+
+本 mod 的 manifest 写 `side = "client"`：Horizon 把这类包当作本地内容，进服时不比对；
+若写成 `side = "both"`，只装一边会被拒绝进服（`Your mods don't match this server's`）。
+验收里的 `chest_client_only`、`chest_server_only` 两个场景覆盖了只装客户端、只装服务端的组合。
 
 ## 设置与按键
 
@@ -92,6 +118,16 @@ pwsh tools/contact_sheet.ps1         # 把最新一次截图的 HUD 区域拼成
 输出在 `logs/verify-<时间>/`：每个目标一张截图、`verify.log`（全部 MCP 调用与返回）、`game-log-jade.txt`（游戏日志中与 jade/wasm/panic 相关的行）。
 `tools/hzmcp.py` 是驱动 `horizon-launcher mcp` 的小客户端，也可单独用：`python -I tools/hzmcp.py list game_`。
 
+设置页、按键绑定页和提示框动画这类没法逐像素比对的界面，用 `tools/ui_check.py` 截图后目视检查：
+
+```powershell
+python -I tools/ui_check.py          # 加 --keep 结束后不关游戏
+```
+
+它以中文界面离屏进服，打开“选项 > 模组 > Jade”设置页滚动截四屏，再截按键绑定页底部，
+最后从看天转向箱子、再转回去各连拍 8 张，拼成 `anim-sheet.png`（前两行淡入、后两行淡出）。
+脚本只检查设置项和两个按键存在、没有未翻译的键；输出在 `logs/ui-<时间>/`。
+
 ### 多人 e2e
 
 ```powershell
@@ -115,6 +151,12 @@ python -I tools/perf.py --update-baseline  # 在本机重写基线
 比较 CPU 平均耗时（画面被垂直同步限速，帧时间看不出 mod 开销）。先跑 A/A 量出本机波动，阈值是“基线开销 + 2 倍波动”，
 绝对上限 1ms；同时用 `perf.json` 算每秒请求数（上限 2.5），并记录服务端 mspt。报告在 `logs/perf-<时间>/report.md`。
 性能测试不放进 CI（CI 没有游戏环境），换机器后请重写基线。
+
+## 发布
+
+1. 把 `horizon-mod.toml` 的 `version` 改成新版本，在 `CHANGELOG.md` 里把“未发布”下的内容移到 `## <版本>` 段落，更新上面的兼容版本表。
+2. 合并到 main 后打标签并推送：`git tag v<版本>`，`git push origin v<版本>`。
+3. CI 构建通过后会核对标签与 `version` 是否一致，再把 `jade.hmod` 发布到 GitHub Release，说明取自 CHANGELOG 对应段落。
 
 ## 许可与署名
 

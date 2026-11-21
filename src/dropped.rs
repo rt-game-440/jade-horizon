@@ -2,7 +2,7 @@
 //! 取触及距离内最近的一个，并且要比准星命中的方块或实体更近。
 use mod_api::{ClientHost, CrosshairTarget, EntityRef};
 
-use crate::fluid::{direction, distance, eye, reach};
+use crate::ray::{direction, distance, eye, reach};
 
 /// 射线与轴对齐盒的进入距离（slab 法）；射线起点在盒内时为 0，不相交返回 None。
 pub fn ray_box(origin: [f64; 3], dir: [f64; 3], min: [f64; 3], max: [f64; 3]) -> Option<f64> {

@@ -26,6 +26,19 @@ enum Kind {
     Shears,
 }
 
+impl Kind {
+    /// 物品 id 里的工具名：`minecraft:<等级>_<工具名>`。
+    fn name(self) -> &'static str {
+        match self {
+            Kind::Pickaxe => "pickaxe",
+            Kind::Axe => "axe",
+            Kind::Shovel => "shovel",
+            Kind::Hoe => "hoe",
+            Kind::Shears => "shears",
+        }
+    }
+}
+
 /// 工具等级，决定图标用木、石、铁还是钻石。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tier {
@@ -35,26 +48,22 @@ enum Tier {
     Diamond,
 }
 
-/// 工具物品的 id；剪刀不分等级。
-fn tool_id(kind: Kind, tier: Tier) -> &'static str {
-    match (kind, tier) {
-        (Kind::Shears, _) => "minecraft:shears",
-        (Kind::Pickaxe, Tier::Wooden) => "minecraft:wooden_pickaxe",
-        (Kind::Pickaxe, Tier::Stone) => "minecraft:stone_pickaxe",
-        (Kind::Pickaxe, Tier::Iron) => "minecraft:iron_pickaxe",
-        (Kind::Pickaxe, Tier::Diamond) => "minecraft:diamond_pickaxe",
-        (Kind::Axe, Tier::Wooden) => "minecraft:wooden_axe",
-        (Kind::Axe, Tier::Stone) => "minecraft:stone_axe",
-        (Kind::Axe, Tier::Iron) => "minecraft:iron_axe",
-        (Kind::Axe, Tier::Diamond) => "minecraft:diamond_axe",
-        (Kind::Shovel, Tier::Wooden) => "minecraft:wooden_shovel",
-        (Kind::Shovel, Tier::Stone) => "minecraft:stone_shovel",
-        (Kind::Shovel, Tier::Iron) => "minecraft:iron_shovel",
-        (Kind::Shovel, Tier::Diamond) => "minecraft:diamond_shovel",
-        (Kind::Hoe, Tier::Wooden) => "minecraft:wooden_hoe",
-        (Kind::Hoe, Tier::Stone) => "minecraft:stone_hoe",
-        (Kind::Hoe, Tier::Iron) => "minecraft:iron_hoe",
-        (Kind::Hoe, Tier::Diamond) => "minecraft:diamond_hoe",
+impl Tier {
+    fn name(self) -> &'static str {
+        match self {
+            Tier::Wooden => "wooden",
+            Tier::Stone => "stone",
+            Tier::Iron => "iron",
+            Tier::Diamond => "diamond",
+        }
+    }
+}
+
+/// 工具物品的 id；剪刀不分等级，是唯一的例外。
+fn tool_id(kind: Kind, tier: Tier) -> String {
+    match kind {
+        Kind::Shears => "minecraft:shears".to_owned(),
+        _ => format!("minecraft:{}_{}", tier.name(), kind.name()),
     }
 }
 
@@ -82,7 +91,11 @@ fn cached_tools() -> &'static Mutex<HashMap<String, Option<ItemKey>>> {
     TOOLS.get_or_init(Default::default)
 }
 
-/// 准星方块的挖掘要求；不需要正确工具（泥土、木头等）时返回 None，不显示这一行。
+/// 准星方块的挖掘要求；不需要正确工具（泥土、木头、树叶等）时返回 None，不显示这一行。
+///
+/// 这是有意的取舍：这类方块空手也能采下掉落物，“能否采集”永远是“能”，
+/// 再显示“最适合的工具”会让准星扫过的大多数方块都多一行，信息量很小。
+/// 需要正确工具的方块（石头、矿石、黑曜石等）才显示工具图标和能否采集。
 pub fn of(host: &dyn ClientHost, state: BlockState) -> Option<Harvest> {
     let blocks = host.block_states();
     if !blocks.requires_correct_tool(state)? {
@@ -124,7 +137,7 @@ fn resolve(host: &dyn ClientHost, block: BlockKey) -> Option<ItemKey> {
         .find(|(_, tag)| in_tag(host, block, tag))
         .map(|(tier, _)| *tier)
         .unwrap_or(Tier::Wooden);
-    host.item_key(&Identifier::parse_namespaced(tool_id(kind, tier))?)
+    host.item_key(&Identifier::parse_namespaced(&tool_id(kind, tier))?)
 }
 
 fn in_tag(host: &dyn ClientHost, block: BlockKey, tag: &str) -> bool {

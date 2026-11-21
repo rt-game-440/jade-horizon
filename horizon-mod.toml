@@ -8,9 +8,9 @@ license_url = "https://creativecommons.org/licenses/by-nc-sa/4.0/"
 credits = "Based on Jade by Snownee (https://github.com/Snownee/Jade), licensed CC BY-NC-SA 4.0. Translations from the Jade project and its translators."
 # A wasm mod: Rust in src/, built to mod.wasm by `cargo horizon-mod build --wasm` against the SDK build Cargo.toml pins, beside data/ and assets/.
 api = "0.2"
-side = "both"
+side = "client"
 capabilities = ["registries"]
 
 [wasm]
-sha512 = "cebb83c0b0f5c8ac324ff6ab49ac8fde64fe6ca9c2d663ddec2d1ef4fa48308b1d0ac37d68b543731ad0ddad622aca2328b69e30cb5312c1fc3e318d46032bfd"
+sha512 = "a71fc2720b09e8e4624820f67f1afd2e8dd1f38ce889dbcf1370b7a496279335146367582ad56bfbfd76b9023e23711ea5b5e389fe0bd8aed119e90b68247f03"
 toolchain = "1.99.1 58cf8f9c35b355199727627d07ae34a4e2846d67"

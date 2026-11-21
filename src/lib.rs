@@ -19,6 +19,7 @@ mod harvest;
 mod lang_keys_test;
 mod limit;
 mod net;
+mod ray;
 mod render;
 mod server;
 mod stats;

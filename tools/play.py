@@ -43,7 +43,7 @@ def main():
         return
     if not HMOD.exists():
         sys.exit("缺少 target/horizon-mod/jade.hmod，先运行 cargo horizon-mod build --wasm")
-    launch(ctl, srv, resources, offscreen=False)
+    launch(ctl, srv, resources, offscreen=False, lang="zh_cn")
     srv("cmd", "kill @e[type=!player]")
     for command in DEMO:
         srv("cmd", command)
