@@ -7,13 +7,21 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mod_api::{BlockState, ClientHost, CrosshairTarget, Identifier, ItemKey};
 
+use crate::config::{Config, Feature};
 use crate::net::{KIND_BLOCK, KIND_ENTITY, NetLine, NetTarget, Request, ServerData};
+
+/// 文字的语气：具体颜色由主题决定。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tone {
+    Normal,
+    Warn,
+}
 
 /// 提示框里的一行。
 #[derive(Clone, Debug, PartialEq)]
 pub enum Row {
-    /// 普通文字与颜色。
-    Line(String, u32),
+    /// 一行文字；颜色由主题按语气决定。
+    Line(String, Tone),
     /// 生命值：当前、最大。
     Health(f32, f32),
     /// 盔甲值：每 2 点一个图标。
@@ -24,6 +32,18 @@ pub enum Row {
     Progress { inputs: Vec<(ItemKey, i32)>, outputs: Vec<(ItemKey, i32)>, fraction: f32 },
     /// 需要的工具与能不能采集：工具图标 + ✔/✘。
     Harvest { tool: Option<ItemKey>, ok: bool },
+}
+
+/// 组装中的一行：内容、精简模式下是否隐藏（服务端行键）、属于哪个分项开关。
+#[derive(Clone, Debug, PartialEq)]
+struct Entry<'a> {
+    row: Row,
+    detail: Option<&'a str>,
+    feature: Feature,
+}
+
+fn entry(row: Row, feature: Feature) -> Entry<'static> {
+    Entry { row, detail: None, feature }
 }
 
 /// 当前要画的提示框。
@@ -48,6 +68,29 @@ struct State {
     server: Option<ServerData>,
     ticks_since_request: u32,
     tooltip: Option<Tooltip>,
+    /// 玩家用按键临时隐藏了提示框；不写回设置，重启后恢复显示。
+    overlay_hidden: bool,
+    /// 玩家用按键临时关掉了流体显示。
+    liquid_hidden: bool,
+}
+
+/// 按键 id（`lib.rs` 里注册）。
+pub const KEY_SHOW_OVERLAY: &str = "show_overlay";
+pub const KEY_TOGGLE_LIQUID: &str = "toggle_liquid";
+
+/// 本 tick 内这个按键被按了几次。
+fn clicks(host: &mut dyn ClientHost, id: &str) -> u32 {
+    let mut n = 0;
+    // 设上限：宿主一直返回 true 也不会死循环。
+    while n < 16 && host.consume_click("jade", id) {
+        n += 1;
+    }
+    n
+}
+
+/// 按了 `clicks` 次之后开关的状态。
+fn toggled(state: bool, clicks: u32) -> bool {
+    state ^ (clicks % 2 == 1)
 }
 
 fn state() -> &'static Mutex<State> {
@@ -72,6 +115,7 @@ pub fn set_mod_name(namespace: &str, name: &str) {
 
 /// 服务端数据到达。
 pub fn receive(data: ServerData) {
+    crate::stats::record_reply(data.wire_size());
     let mut st = lock(state());
     if st.target.as_ref() == Some(&data.target) {
         st.server = Some(data);
@@ -106,9 +150,28 @@ pub fn record_mining(prediction: &mod_api::ClientMiningPrediction) {
 
 /// 每个客户端 tick 调用：更新目标，返回需要发送的请求。
 pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
+    let cfg = crate::config::refresh(host);
+    // 按键每 tick 都要读（否则按下次数会攒到隐藏结束后一起生效）。
+    let overlay_clicks = clicks(host, KEY_SHOW_OVERLAY);
+    let liquid_clicks = clicks(host, KEY_TOGGLE_LIQUID);
+    let (hidden, liquid_off) = {
+        let mut st = lock(state());
+        st.overlay_hidden = toggled(st.overlay_hidden, overlay_clicks);
+        st.liquid_hidden = toggled(st.liquid_hidden, liquid_clicks);
+        (st.overlay_hidden, st.liquid_hidden)
+    };
+    // 隐藏（或设置里关掉）时什么也不做：不组装提示框，也不向服务端发请求。
+    if hidden || !cfg.enabled {
+        let mut st = lock(state());
+        st.tooltip = None;
+        // 忘掉旧目标和旧数据：重新显示时当作新目标，立即向服务端要新数据。
+        st.target = None;
+        st.server = None;
+        return None;
+    }
     // 掉落物原版瞄不到，自己做射线；它比准星命中的东西近时，当作准星命中的实体。
-    let dropped = crate::dropped::target(host);
-    let fluid = if dropped.is_some() { None } else { fluid_target(host) };
+    let dropped = if cfg.has(Feature::Dropped) { crate::dropped::target(host) } else { None };
+    let fluid = if dropped.is_some() || !cfg.has(Feature::Fluid) || liquid_off { None } else { fluid_target(host) };
     // 显示流体时不向服务端要数据（流体信息全在客户端算）。
     let target = if fluid.is_some() { None } else { dropped.or_else(|| host.crosshair_target()) };
     let net = target.as_ref().and_then(net_target);
@@ -131,10 +194,15 @@ pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
     let detail = shift_down(host);
     let mut tooltip = match &fluid {
         Some(fluid) => Some(fluid_tooltip(host, fluid)),
-        None => target.as_ref().and_then(|t| build(host, t, server.as_ref(), detail)),
+        None => target.as_ref().and_then(|t| build(host, t, server.as_ref(), detail, &cfg)),
     };
     if let Some(tip) = tooltip.as_mut() {
-        tip.breaking = breaking(target_pos(&target), &mining, tick);
+        if cfg.has(Feature::Mining) {
+            tip.breaking = breaking(target_pos(&target), &mining, tick);
+        }
+        if !cfg.has(Feature::ModName) {
+            tip.mod_name.clear();
+        }
     }
     lock(state()).tooltip = tooltip;
     request
@@ -213,9 +281,6 @@ fn block_pos(pos: &mod_api::BlockPos) -> [i32; 3] {
     [pos.x, pos.y, pos.z]
 }
 
-const GRAY: u32 = 0xFFAA_AAAA;
-const RED: u32 = 0xFFFF_5555;
-
 /// 蜂巢最多 5 级蜂蜜。
 const HONEY_MAX: u32 = 5;
 
@@ -237,9 +302,9 @@ const DETAIL_KEYS: &[&str] = &[
 const COMPACT_ITEM_ROWS: usize = 1;
 const DETAIL_ITEM_ROWS: usize = 6;
 
-fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&ServerData>, detail: bool) -> Option<Tooltip> {
+fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&ServerData>, detail: bool, cfg: &Config) -> Option<Tooltip> {
     let mut tip = Tooltip::default();
-    let mut rows: Vec<(Row, Option<&str>)> = Vec::new();
+    let mut rows: Vec<Entry> = Vec::new();
     let namespace;
     match target {
         CrosshairTarget::Block { state, .. } => {
@@ -252,12 +317,10 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
             tip.icon = host.block_item(block).filter(|item| item.id(host) != "minecraft:air");
             tip.title = block_name(host, &id);
             let props = properties(host, *state);
-            let mut plain = Vec::new();
             if let Some(harvest) = crate::harvest::of(host, *state) {
-                plain.push(Row::Harvest { tool: harvest.tool, ok: harvest.ok });
+                rows.push(entry(Row::Harvest { tool: harvest.tool, ok: harvest.ok }, Feature::Harvest));
             }
-            block_rows(host, &id, &props, &mut plain);
-            rows.extend(plain.into_iter().map(|r| (r, None)));
+            block_rows(host, &id, &props, &mut rows);
         }
         CrosshairTarget::Entity { entity, .. } => {
             let kind = entity.kind(host).map(|k| k.id(host)).unwrap_or_default();
@@ -265,7 +328,7 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
             tip.title = entity.name(host).unwrap_or_else(|| translated(host, &key_of("entity", &kind)));
             if let Some(living) = host.living(*entity) {
                 if let (Some(hp), Some(max)) = (living.health(host), living.max_health(host)) {
-                    rows.push((Row::Health(hp, max), None));
+                    rows.push(entry(Row::Health(hp, max), Feature::Health));
                 }
             }
         }
@@ -274,26 +337,29 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
     if let Some(data) = server {
         server_rows(host, data, &mut rows);
     }
-    let (mut visible, hidden, truncated) = visible_rows(rows, detail);
+    let (mut visible, hidden, truncated) = visible_rows(rows, detail, cfg);
     if hidden {
-        visible.push(Row::Line(tr(host, "jade.horizon.shift_for_more", &[]), GRAY));
+        visible.push(Row::Line(tr(host, "jade.horizon.shift_for_more", &[]), Tone::Normal));
     }
     if truncated {
-        visible.push(Row::Line(tr(host, "jade.horizon.more_items", &[]), GRAY));
+        visible.push(Row::Line(tr(host, "jade.horizon.more_items", &[]), Tone::Normal));
     }
     tip.rows = visible;
     tip.mod_name = mod_name(host, &namespace);
     Some(tip)
 }
 
-/// 按精简/详细模式过滤行，返回 `(显示的行, 精简模式隐藏了内容, 详细模式也放不下)`。
-fn visible_rows(rows: Vec<(Row, Option<&str>)>, detail: bool) -> (Vec<Row>, bool, bool) {
+/// 按分项开关与精简/详细模式过滤行，返回 `(显示的行, 精简模式隐藏了内容, 详细模式也放不下)`。
+fn visible_rows(rows: Vec<Entry>, detail: bool, cfg: &Config) -> (Vec<Row>, bool, bool) {
     let item_limit = if detail { DETAIL_ITEM_ROWS } else { COMPACT_ITEM_ROWS };
     let mut item_rows = 0;
     let mut out = Vec::with_capacity(rows.len());
     let mut hidden = false;
     let mut truncated = false;
-    for (row, key) in rows {
+    for Entry { row, detail: key, feature } in rows {
+        if !cfg.has(feature) {
+            continue;
+        }
         if matches!(row, Row::Items(_)) {
             item_rows += 1;
             if item_rows > item_limit {
@@ -329,7 +395,7 @@ fn properties(host: &dyn ClientHost, state: BlockState) -> HashMap<String, Strin
     out
 }
 
-fn block_rows(host: &dyn ClientHost, id: &str, props: &HashMap<String, String>, rows: &mut Vec<Row>) {
+fn block_rows(host: &dyn ClientHost, id: &str, props: &HashMap<String, String>, rows: &mut Vec<Entry>) {
     let prop = |k: &str| props.get(k).map(String::as_str);
     let path = id.split(':').nth(1).unwrap_or(id);
     // 作物生长（CropProgressProvider）。
@@ -341,7 +407,7 @@ fn block_rows(host: &dyn ClientHost, id: &str, props: &HashMap<String, String>, 
                 let pct = format!("{:.0}%", age as f32 * 100.0 / max as f32);
                 tr(host, "tooltip.jade.crop_growth", &[pct])
             };
-            rows.push(Row::Line(text, GRAY));
+            rows.push(entry(Row::Line(text, Tone::Normal), Feature::Crop));
         }
     }
     // 红石（RedstoneProvider）。
@@ -350,26 +416,26 @@ fn block_rows(host: &dyn ClientHost, id: &str, props: &HashMap<String, String>, 
             if let Some(d) = prop("delay") {
                 let ticks = d.parse::<u32>().unwrap_or(1);
                 let text = ticks_text(host, ticks);
-                rows.push(Row::Line(tr(host, "tooltip.jade.delay", &[text]), GRAY));
+                rows.push(entry(Row::Line(tr(host, "tooltip.jade.delay", &[text]), Tone::Normal), Feature::Redstone));
             }
         }
         "comparator" => {
             if let Some(m) = prop("mode") {
                 let key = if m == "subtract" { "tooltip.jade.mode_subtractor" } else { "tooltip.jade.mode_comparator" };
                 let mode = tr(host, key, &[]);
-                rows.push(Row::Line(tr(host, "tooltip.jade.mode", &[mode]), GRAY));
+                rows.push(entry(Row::Line(tr(host, "tooltip.jade.mode", &[mode]), Tone::Normal), Feature::Redstone));
             }
         }
         "lever" => {
             if let Some(p) = prop("powered") {
                 let on = tr(host, if p == "true" { "tooltip.jade.state_on" } else { "tooltip.jade.state_off" }, &[]);
-                rows.push(Row::Line(tr(host, "tooltip.jade.state", &[on]), GRAY));
+                rows.push(entry(Row::Line(tr(host, "tooltip.jade.state", &[on]), Tone::Normal), Feature::Redstone));
             }
         }
         "beehive" | "bee_nest" => {
             if let Some(h) = prop("honey_level") {
                 let amount = tr(host, "jade.fraction", &[h.to_owned(), HONEY_MAX.to_string()]);
-                rows.push(Row::Line(tr(host, "jade.beehive.honey", &[amount]), GRAY));
+                rows.push(entry(Row::Line(tr(host, "jade.beehive.honey", &[amount]), Tone::Normal), Feature::Always));
             }
         }
         "note_block" => {
@@ -377,19 +443,19 @@ fn block_rows(host: &dyn ClientHost, id: &str, props: &HashMap<String, String>, 
                 let inst = tr(host, &format!("jade.instrument.{inst}"), &[]);
                 let note = note_name(note.parse().unwrap_or(0)).to_owned();
                 let text = tr(host, "jade.horizon.note_block", &[inst, note]);
-                rows.push(Row::Line(text, GRAY));
+                rows.push(entry(Row::Line(text, Tone::Normal), Feature::Always));
             }
         }
         "tnt" => {
             if prop("unstable") == Some("true") {
-                rows.push(Row::Line(tr(host, "jade.tnt.unstable", &[]), RED));
+                rows.push(entry(Row::Line(tr(host, "jade.tnt.unstable", &[]), Tone::Warn), Feature::Always));
             }
         }
         _ => {}
     }
     if let Some(power) = prop("power") {
         if power != "0" {
-            rows.push(Row::Line(tr(host, "tooltip.jade.power", &[power.to_owned()]), GRAY));
+            rows.push(entry(Row::Line(tr(host, "tooltip.jade.power", &[power.to_owned()]), Tone::Normal), Feature::Redstone));
         }
     }
 }
@@ -410,29 +476,40 @@ fn note_name(note: u32) -> &'static str {
     NAMES[(note % 12) as usize]
 }
 
-fn server_rows<'a>(host: &dyn ClientHost, data: &'a ServerData, rows: &mut Vec<(Row, Option<&'a str>)>) {
+fn server_rows<'a>(host: &dyn ClientHost, data: &'a ServerData, rows: &mut Vec<Entry<'a>>) {
     // 客户端读不到生物生命值时（Horizon 客户端未同步部分生物），用服务端的值，放在标题下第一行。
-    if data.max_health > 0.0 && !rows.iter().any(|(r, _)| matches!(r, Row::Health(..))) {
-        rows.insert(0, (Row::Health(data.health, data.max_health), None));
+    if data.max_health > 0.0 && !rows.iter().any(|e| matches!(e.row, Row::Health(..))) {
+        rows.insert(0, entry(Row::Health(data.health, data.max_health), Feature::Health));
     }
     if data.armor > 0.0 {
-        let at = rows.iter().position(|(r, _)| matches!(r, Row::Health(..))).map_or(0, |i| i + 1);
-        rows.insert(at, (Row::Armor(data.armor), None));
+        let at = rows.iter().position(|e| matches!(e.row, Row::Health(..))).map_or(0, |i| i + 1);
+        rows.insert(at, entry(Row::Armor(data.armor), Feature::Armor));
     }
     for p in &data.progress {
         let items = |v: &[crate::net::NetItem]| v.iter().filter_map(|i| Some((item_key(host, &i.id)?, i.count))).collect();
         let fraction = if p.total > 0 { (p.current as f32 / p.total as f32).clamp(0.0, 1.0) } else { 0.0 };
-        rows.push((Row::Progress { inputs: items(&p.inputs), outputs: items(&p.outputs), fraction }, None));
+        rows.push(entry(Row::Progress { inputs: items(&p.inputs), outputs: items(&p.outputs), fraction }, Feature::Furnace));
     }
     if !data.items.is_empty() {
         let items: Vec<_> = data.items.iter().filter_map(|i| Some((item_key(host, &i.id)?, i.count))).collect();
         // 每行最多 9 个，与 Jade 默认的容器显示一致；显示几行由 visible_rows 决定。
         for chunk in items.chunks(9) {
-            rows.push((Row::Items(chunk.to_vec()), None));
+            rows.push(entry(Row::Items(chunk.to_vec()), Feature::Container));
         }
     }
     for line in &data.lines {
-        rows.push((Row::Line(net_line(host, line), GRAY), Some(line.key.as_str())));
+        rows.push(Entry { row: Row::Line(net_line(host, line), Tone::Normal), detail: Some(line.key.as_str()), feature: line_feature(&line.key) });
+    }
+}
+
+/// 服务端行属于哪个分项开关；没有开关的归 `Always`。
+fn line_feature(key: &str) -> Feature {
+    match key {
+        "jade.potion" => Feature::Potion,
+        "jade.owner" => Feature::Owner,
+        "tooltip.jade.villager_profession" => Feature::Villager,
+        k if k.starts_with("jade.horseStat.") => Feature::Horse,
+        _ => Feature::Always,
     }
 }
 
@@ -632,48 +709,92 @@ mod tests {
         assert_eq!(format_args_java("§oWhat?", &[]), "What?");
     }
 
+    fn items(n: usize) -> Vec<Entry<'static>> {
+        (0..n).map(|_| entry(Row::Items(vec![]), Feature::Container)).collect()
+    }
+
+    fn line(text: &str, key: &'static str) -> Entry<'static> {
+        Entry { row: Row::Line(text.into(), Tone::Normal), detail: Some(key), feature: line_feature(key) }
+    }
+
+    #[test]
+    fn clicks_flip_the_switch() {
+        assert!(toggled(false, 1));
+        assert!(!toggled(true, 1));
+        assert!(!toggled(false, 2));
+        assert!(toggled(false, 3));
+        assert!(toggled(true, 0));
+    }
+
     #[test]
     fn compact_limits_item_rows_to_one() {
-        let one = vec![(Row::Items(vec![]), None)];
-        assert_eq!(visible_rows(one.clone(), false), (vec![Row::Items(vec![])], false, false));
-        assert_eq!(visible_rows(one, true), (vec![Row::Items(vec![])], false, false));
+        let cfg = Config::default();
+        assert_eq!(visible_rows(items(1), false, &cfg), (vec![Row::Items(vec![])], false, false));
+        assert_eq!(visible_rows(items(1), true, &cfg), (vec![Row::Items(vec![])], false, false));
 
-        let seven: Vec<_> = (0..7).map(|_| (Row::Items(vec![]), None)).collect();
-        let (compact, hidden, truncated) = visible_rows(seven.clone(), false);
+        let (compact, hidden, truncated) = visible_rows(items(7), false, &cfg);
         assert_eq!(compact.len(), 1);
         assert!(hidden);
         assert!(truncated);
 
-        let (detail, hidden, truncated) = visible_rows(seven, true);
+        let (detail, hidden, truncated) = visible_rows(items(7), true, &cfg);
         assert_eq!(detail.len(), 6);
         assert!(!hidden);
         assert!(truncated);
 
         // 恰好 6 行：详细模式放得下，不提示截断。
-        let six: Vec<_> = (0..6).map(|_| (Row::Items(vec![]), None)).collect();
-        let (_, hidden, truncated) = visible_rows(six, true);
+        let (_, hidden, truncated) = visible_rows(items(6), true, &cfg);
         assert!(!hidden && !truncated);
     }
 
     #[test]
     fn compact_hides_detail_keys_only() {
+        let cfg = Config::default();
         let rows = vec![
-            (Row::Health(10.0, 10.0), None),
-            (Row::Line("Bees: 3".into(), GRAY), Some("jade.beehive.bees")),
-            (Row::Line("Growing time: 10m".into(), GRAY), Some("jade.mobgrowth.time")),
-            (Row::Line("Breeding CD: 2m".into(), GRAY), Some("jade.mobbreeding.time")),
-            (Row::Line("Breeding CD: In Love".into(), GRAY), Some("jade.mobbreeding.fed")),
-            (Row::Line("Next egg: 5m".into(), GRAY), Some("jade.nextEgg")),
+            entry(Row::Health(10.0, 10.0), Feature::Health),
+            line("Bees: 3", "jade.beehive.bees"),
+            line("Growing time: 10m", "jade.mobgrowth.time"),
+            line("Breeding CD: 2m", "jade.mobbreeding.time"),
+            line("Breeding CD: In Love", "jade.mobbreeding.fed"),
+            line("Next egg: 5m", "jade.nextEgg"),
         ];
-        let (compact, hidden, _) = visible_rows(rows.clone(), false);
-        assert_eq!(
-            compact,
-            vec![Row::Health(10.0, 10.0), Row::Line("Bees: 3".into(), GRAY)]
-        );
+        let (compact, hidden, _) = visible_rows(rows.clone(), false, &cfg);
+        assert_eq!(compact, vec![Row::Health(10.0, 10.0), Row::Line("Bees: 3".into(), Tone::Normal)]);
         assert!(hidden);
 
-        let (detail, hidden, _) = visible_rows(rows, true);
+        let (detail, hidden, _) = visible_rows(rows, true, &cfg);
         assert_eq!(detail.len(), 6);
         assert!(!hidden);
+    }
+
+    #[test]
+    fn feature_switches_filter_rows() {
+        let rows = vec![
+            entry(Row::Health(10.0, 10.0), Feature::Health),
+            entry(Row::Armor(8.0), Feature::Armor),
+            line("Speed (0:30)", "jade.potion"),
+            line("Owner: Alice", "jade.owner"),
+            line("Bees: 3", "jade.beehive.bees"),
+        ];
+        let mut cfg = Config::default();
+        assert_eq!(visible_rows(rows.clone(), true, &cfg).0.len(), 5);
+        cfg.set(Feature::Armor, false);
+        cfg.set(Feature::Potion, false);
+        let (out, hidden, _) = visible_rows(rows.clone(), false, &cfg);
+        // 被开关关掉的行不算“精简模式隐藏了内容”：Owner 属详细行，关掉的 Potion 不触发提示。
+        assert_eq!(out, vec![Row::Health(10.0, 10.0), Row::Line("Bees: 3".into(), Tone::Normal)]);
+        assert!(hidden);
+        cfg.set(Feature::Owner, false);
+        assert!(!visible_rows(rows, false, &cfg).1);
+    }
+
+    #[test]
+    fn server_lines_map_to_features() {
+        assert_eq!(line_feature("jade.potion"), Feature::Potion);
+        assert_eq!(line_feature("jade.horseStat.jump"), Feature::Horse);
+        assert_eq!(line_feature("jade.horseStat.speed"), Feature::Horse);
+        assert_eq!(line_feature("tooltip.jade.villager_profession"), Feature::Villager);
+        assert_eq!(line_feature("jade.owner"), Feature::Owner);
+        assert_eq!(line_feature("jade.nextEgg"), Feature::Always);
     }
 }

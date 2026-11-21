@@ -7,9 +7,29 @@
 from PIL import Image
 
 
-# 提示框底色的判色：很暗，红蓝接近，绿色明显更低。
-def _is_background(r, g, b):
+# 各主题底色的判色（底色按设置里的不透明度叠在世界上，所以留了余量）。
+def _classic(r, g, b):
+    """原版风：很暗，红蓝接近，绿色明显更低。"""
     return r < 45 and g < 30 and b < 45 and abs(r - b) < 20
+
+
+def _light(r, g, b):
+    """浅色：近乎白的灰（天空偏蓝、云偏灰，都达不到这么亮且三通道这么接近）。"""
+    return min(r, g, b) > 218 and max(r, g, b) - min(r, g, b) < 12
+
+
+def _black(r, g, b):
+    """高对比度：纯黑底。"""
+    return max(r, g, b) < 24
+
+
+THEMES = {"classic": _classic, "dark": _classic, "light": _light, "high_contrast": _black}
+# 提示框所在的搜索区域 (左, 上, 右, 下) 占屏幕的比例，以及框里一定有的点的横向位置占比。
+ANCHORS = {
+    "top_center": ((0.2, 0.0, 0.8, 0.35), 0.5),
+    "top_left": ((0.0, 0.0, 0.5, 0.35), 0.03),
+    "top_right": ((0.5, 0.0, 1.0, 0.35), 0.97),
+}
 
 
 def _runs(counts, minimum):
@@ -28,7 +48,7 @@ def _runs(counts, minimum):
     return out
 
 
-def tooltip_box(img, coverage=0.03, pad=2):
+def tooltip_box(img, coverage=0.03, pad=2, theme="classic", anchor="top_center"):
     """提示框在截图里的包围盒 (left, top, right, bottom)，找不到返回 None。
 
     只看顶部居中的区域（横向 20%–80%、纵向 35% 以内），夜里或洞穴里的暗色不参与。
@@ -37,26 +57,29 @@ def tooltip_box(img, coverage=0.03, pad=2):
     """
     img = img.convert("RGB")
     w, h = img.size
-    left, top = int(w * 0.2), 0
-    right, bottom = int(w * 0.8), max(1, int(h * 0.35))
+    is_background = THEMES[theme]
+    (fl, ft, fr, fb), seed = ANCHORS[anchor]
+    left, top = int(w * fl), int(h * ft)
+    right, bottom = int(w * fr), max(1, int(h * fb))
     region = img.crop((left, top, right, bottom))
     rw, rh = region.size
     data = region.tobytes()
 
+    seed_x = w * seed - left
     rows = []
     for y in range(rh):
         base = y * rw * 3
-        rows.append(sum(1 for x in range(rw) if _is_background(*data[base + x * 3 : base + x * 3 + 3])))
+        rows.append(sum(1 for x in range(rw) if is_background(*data[base + x * 3 : base + x * 3 + 3])))
     for y0, y1 in _runs(rows, rw * coverage):
         if y1 - y0 + 1 < h * 0.012:
             continue
         height = y1 - y0 + 1
         cols = []
         for x in range(rw):
-            cols.append(sum(1 for y in range(y0, y1 + 1) if _is_background(*data[(y * rw + x) * 3 : (y * rw + x) * 3 + 3])))
+            cols.append(sum(1 for y in range(y0, y1 + 1) if is_background(*data[(y * rw + x) * 3 : (y * rw + x) * 3 + 3])))
         # 列内的文字与图标会占掉一部分像素，这里只要有一成就够；
-        # 提示框总是居中，所以取包含屏幕中心的那一段，左右两侧的暗处（比如展示框）不参与。
-        span = next((r for r in _runs(cols, height * 0.1) if r[0] <= rw / 2 <= r[1]), None)
+        # 提示框总是居中，所以取包含锚点位置的那一段，左右两侧的暗处（比如展示框）不参与。
+        span = next((r for r in _runs(cols, height * 0.1) if r[0] <= seed_x <= r[1]), None)
         if span is None:
             continue
         x0, x1 = span
@@ -71,13 +94,13 @@ def tooltip_box(img, coverage=0.03, pad=2):
     return None
 
 
-def crop_tooltip(img, pad=2):
+def crop_tooltip(img, pad=2, theme="classic", anchor="top_center"):
     """裁出提示框；截图里没有提示框时返回 None。"""
-    box = tooltip_box(img, pad=pad)
+    box = tooltip_box(img, pad=pad, theme=theme, anchor=anchor)
     return None if box is None else img.crop(box)
 
 
-def hud_visible(png, coverage=0.03):
-    """截图顶部中间是否有 Jade 提示框。`png` 是路径或已打开的图片。"""
+def hud_visible(png, coverage=0.03, theme="classic", anchor="top_center"):
+    """截图里指定位置是否有 Jade 提示框。`png` 是路径或已打开的图片。"""
     img = Image.open(png) if isinstance(png, (str, bytes)) or hasattr(png, "__fspath__") else png
-    return tooltip_box(img, coverage=coverage) is not None
+    return tooltip_box(img, coverage=coverage, theme=theme, anchor=anchor) is not None
