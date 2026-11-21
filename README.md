@@ -1,5 +1,12 @@
 # Jade for Horizon
 
+[English](README.en.md) | **简体中文**
+
+[![Release](https://img.shields.io/github/v/release/rt-game-440/jade-horizon?include_prereleases&label=release)](https://github.com/rt-game-440/jade-horizon/releases)
+[![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey)](LICENSE.md)
+![Horizon](https://img.shields.io/badge/Horizon-nightly--2026--11--19-blue)
+![Minecraft](https://img.shields.io/badge/Minecraft-26.3-green)
+
 [Jade](https://github.com/Snownee/Jade)（作者 Snownee）在 [Horizon](https://playhorizon.dev)（Rust 重写的 Minecraft 26.3）上的非官方 WebAssembly 移植。
 准星对准方块或实体时，在屏幕顶部显示它的信息。
 
