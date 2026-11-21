@@ -1,0 +1,12 @@
+[package]
+name = "mod-jade-fixture-energy"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+horizon-mod-api = { path = "../../.horizon/sdk/api/crates/horizon-mod-api" }
+
+[package.metadata.horizon]
+sdk = "5ef7734fdd854add5efd6817178be3c988d8d050"

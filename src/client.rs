@@ -17,6 +17,15 @@ pub enum Tone {
     Warn,
 }
 
+/// 储罐条的种类，决定颜色。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TankKind {
+    Energy,
+    Water,
+    Lava,
+    Other,
+}
+
 /// 提示框里的一行。
 #[derive(Clone, Debug, PartialEq)]
 pub enum Row {
@@ -30,6 +39,8 @@ pub enum Row {
     Items(Vec<(ItemKey, i32)>),
     /// 输入物品 → 进度箭头 → 输出物品。
     Progress { inputs: Vec<(ItemKey, i32)>, outputs: Vec<(ItemKey, i32)>, fraction: f32 },
+    /// 能量条或流体储罐：种类、占比 0..1、叠在条上的文字。
+    Tank { kind: TankKind, fraction: f32, text: String },
     /// 需要的工具与能不能采集：工具图标 + ✔/✘。
     Harvest { tool: Option<ItemKey>, ok: bool },
 }
@@ -498,9 +509,43 @@ fn server_rows<'a>(host: &dyn ClientHost, data: &'a ServerData, rows: &mut Vec<E
             rows.push(entry(Row::Items(chunk.to_vec()), Feature::Container));
         }
     }
+    for t in &data.tanks {
+        rows.push(tank_entry(host, t));
+    }
     for line in &data.lines {
         rows.push(Entry { row: Row::Line(net_line(host, line), Tone::Normal), detail: Some(line.key.as_str()), feature: line_feature(&line.key) });
     }
+}
+
+/// 储罐条：能量显示 `4,000 / 10,000 FE`，流体显示流体名与 `mB`。
+fn tank_entry<'a>(host: &dyn ClientHost, t: &crate::net::NetTank) -> Entry<'a> {
+    let fraction = if t.capacity > 0 { (t.amount as f32 / t.capacity as f32).clamp(0.0, 1.0) } else { 0.0 };
+    if t.kind == crate::net::TANK_ENERGY {
+        let text = tr(host, "jade.fe", &[group_digits(t.amount), format!("{} FE", group_digits(t.capacity))]);
+        return entry(Row::Tank { kind: TankKind::Energy, fraction, text }, Feature::Energy);
+    }
+    let kind = match t.id.as_str() {
+        "minecraft:water" => TankKind::Water,
+        "minecraft:lava" => TankKind::Lava,
+        _ => TankKind::Other,
+    };
+    let name = translated(host, &key_of("block", &t.id));
+    let amounts = tr(host, "jade.fluid.with_capacity", &[group_digits(t.amount), format!("{} mB", group_digits(t.capacity))]);
+    let text = tr(host, "jade.fluid.text", &[name, amounts]);
+    entry(Row::Tank { kind, fraction, text }, Feature::FluidTank)
+}
+
+/// 千位分隔：`10000` → `10,000`。
+fn group_digits(n: i32) -> String {
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if n < 0 { format!("-{out}") } else { out }
 }
 
 /// 服务端行属于哪个分项开关；没有开关的归 `Always`。
@@ -646,6 +691,15 @@ fn strip_formatting(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn group_digits_adds_thousands_separators() {
+        assert_eq!(group_digits(0), "0");
+        assert_eq!(group_digits(999), "999");
+        assert_eq!(group_digits(1000), "1,000");
+        assert_eq!(group_digits(10_000_000), "10,000,000");
+        assert_eq!(group_digits(-1234), "-1,234");
+    }
+
     use super::*;
 
     #[test]

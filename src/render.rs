@@ -4,7 +4,7 @@ use std::sync::{Mutex, OnceLock};
 
 use mod_api::DrawContext;
 
-use crate::client::{Row, Tone, Tooltip};
+use crate::client::{Row, TankKind, Tone, Tooltip};
 use crate::config::{Anchor, Config, ThemeId};
 
 const PAD: f32 = 4.0;
@@ -135,6 +135,7 @@ fn row_height(row: &Row) -> f32 {
     match row {
         Row::Line(..) | Row::Health(..) | Row::Armor(..) => LINE,
         Row::Items(_) | Row::Progress { .. } | Row::Harvest { .. } => SLOT,
+        Row::Tank { .. } => TANK_H + 2.0,
     }
 }
 
@@ -152,6 +153,7 @@ fn row_width(draw: &dyn DrawContext, row: &Row) -> f32 {
         Row::Items(items) => items.len() as f32 * SLOT,
         Row::Progress { inputs, outputs, .. } => (inputs.len() + outputs.len()) as f32 * SLOT + 26.0,
         Row::Harvest { tool, .. } => (if tool.is_some() { SLOT } else { 0.0 }) + MARK_W,
+        Row::Tank { text, .. } => draw.text_width(text) + 8.0,
     }
 }
 
@@ -387,7 +389,32 @@ fn draw_row(draw: &mut dyn DrawContext, st: &Style, row: &Row, x: f32, y: f32) {
             }
         }
         Row::Harvest { tool, ok } => harvest(draw, st, *tool, *ok, x, y),
+        Row::Tank { kind, fraction, text } => tank(draw, st, *kind, *fraction, text, x, y),
     }
+}
+
+/// 储罐条的高度。
+const TANK_H: f32 = 10.0;
+
+fn tank_color(kind: TankKind) -> u32 {
+    match kind {
+        TankKind::Energy => 0xFFD0_2A2A,
+        TankKind::Water => 0xFF3F_76E4,
+        TankKind::Lava => 0xFFE0_7A1F,
+        TankKind::Other => 0xFF8A_8A8A,
+    }
+}
+
+/// 能量/流体条：空槽打底，已有的部分按种类着色，文字叠在条上。
+fn tank(draw: &mut dyn DrawContext, st: &Style, kind: TankKind, fraction: f32, label: &str, x: f32, y: f32) {
+    let width = draw.text_width(label) + 8.0;
+    let top = y + 1.0;
+    draw.fill([x, top, width, TANK_H], st.c(st.theme.dim));
+    let filled = (width * fraction.clamp(0.0, 1.0)).round();
+    if filled > 0.0 {
+        draw.fill([x, top, filled, TANK_H], st.c(tank_color(kind)));
+    }
+    draw.text(label, [x + 4.0, top + 1.0], st.c(0xFFFF_FFFF), true);
 }
 
 const MARK_W: f32 = 9.0;

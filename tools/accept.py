@@ -36,6 +36,8 @@ Y = 150
 CLIENT = "Alice"
 WORK = ROOT / "target" / "accept"
 BASELINES = ROOT / "tests" / "baselines"
+# 能量夹具 mod（tests/fixture-energy，在该目录里 cargo horizon-mod build --wasm 构建）。
+FIXTURE = ROOT / "tests" / "fixture-energy" / "target" / "horizon-mod" / "jadefixture.hmod"
 # 任一通道相差超过它的像素算“不同”，占提示框的比例超过 TOLERANCE 判为失败。
 # 同一场景重复截图的差异实测为 0.000%；单个数字变化约 0.23%，所以 0.1% 就能抓到。
 PIXEL_DELTA = 32
@@ -177,6 +179,35 @@ SCENES = [
         setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_MORE_NBT}"],
         look=block(-3, Y + 1, 0),
         actions=["key shift down"],
+    ),
+    # 炼药锅没有方块实体，但有 horizon:fluids 能力：水三格、岩浆满罐。
+    scene(
+        "cauldron_water",
+        setup=[f"setblock 2 {Y + 1} -2 minecraft:water_cauldron[level=2]"],
+        look=block(2, Y + 1, -2),
+    ),
+    scene(
+        "cauldron_lava",
+        setup=[f"setblock 2 {Y + 1} -2 minecraft:lava_cauldron"],
+        look=block(2, Y + 1, -2),
+    ),
+    scene(
+        "cauldron_water_hidden",
+        setup=[f"setblock 2 {Y + 1} -2 minecraft:water_cauldron[level=2]"],
+        look=block(2, Y + 1, -2),
+        settings={"show_fluid_tank": False},
+    ),
+    # 夹具 mod 给原版金块一个 4000 / 10000 FE 的能量缓冲。
+    scene(
+        "energy_gold_block",
+        setup=[f"setblock -2 {Y + 1} -2 minecraft:gold_block"],
+        look=block(-2, Y + 1, -2),
+    ),
+    scene(
+        "energy_hidden",
+        setup=[f"setblock -2 {Y + 1} -2 minecraft:gold_block"],
+        look=block(-2, Y + 1, -2),
+        settings={"show_energy": False},
     ),
     scene(
         "wheat",
@@ -491,7 +522,7 @@ def start_server(srv, resources, jade=True):
             timeout=300,
         )
     # 记下模式和 mod 文件的修改时间：mod 重新构建过也要重启服务端才会加载新版。
-    mode = f"{'jade' if jade else 'vanilla'}:{HMOD.stat().st_mtime_ns}"
+    mode = f"{'jade' if jade else 'vanilla'}:{HMOD.stat().st_mtime_ns}:{FIXTURE.stat().st_mtime_ns}"
     marker = sdir / ".jade-mode"
     running = server_running(srv)
     if running and marker.exists() and marker.read_text(encoding="utf-8") == mode:
@@ -513,7 +544,9 @@ def start_server(srv, resources, jade=True):
         toml.write_text(text.rstrip() + "\n\n[missing_mods]\nallow = true\n", encoding="utf-8")
     (sdir / "horizon-mods").mkdir(exist_ok=True)
     shutil.copy2(HMOD, sdir / "horizon-mods" / "jade.hmod")
-    (sdir / "horizon-mods.txt").write_text(f"mod.jade:{'true' if jade else 'false'}\n", encoding="utf-8")
+    # 夹具：给金块一个能量缓冲，只装在服务端；它不依赖 jade，所以所有批次都装。
+    shutil.copy2(FIXTURE, sdir / "horizon-mods" / "jadefixture.hmod")
+    (sdir / "horizon-mods.txt").write_text(f"mod.jade:{'true' if jade else 'false'}\nmod.jadefixture:true\n", encoding="utf-8")
     marker.write_text(mode, encoding="utf-8")
     srv("op", CLIENT)
 
@@ -792,6 +825,8 @@ def main():
         sys.exit("没有要跑的场景")
     if not HMOD.exists():
         sys.exit("缺少 target/horizon-mod/jade.hmod，先运行 cargo horizon-mod build --wasm")
+    if not FIXTURE.exists():
+        sys.exit("缺少能量夹具 mod：在 tests/fixture-energy 里运行 cargo horizon-mod build --wasm")
 
     out = ROOT / "logs" / f"accept-{datetime.now():%Y-%m-%d %H-%M-%S}"
     out.mkdir(parents=True, exist_ok=True)

@@ -41,6 +41,7 @@
 服务端也安装后额外显示：
 
 - 容器内容（通过 `horizon:storage` 能力读取，原版容器与注册了该能力的模组容器都支持）、战利品未生成、容器已上锁
+- 能量缓冲与流体储罐（通过 `horizon:energy`、`horizon:fluids` 能力读取，画成带数值的彩色条；炼药锅也有）
 - 熔炉 / 高炉 / 烟熏炉进度，酿造台进度与燃料，营火烹饪进度
 - 蜂巢蜜蜂数、刷怪笼生物与冷却、唱片机唱片、讲台书本、物品展示框物品
 - 幼年生物成长时间、繁殖冷却、求爱状态、鸡下一次下蛋时间
@@ -98,6 +99,9 @@ python -I tools/accept.py --only chest          # 只跑指定场景（可重复
 python -I tools/accept.py --update              # 重写全部基准
 python -I tools/accept.py --update --only chest # 只重写受影响的场景
 ```
+
+能量场景需要夹具 mod：先在 `tests/fixture-energy` 里运行一次 `cargo horizon-mod build --wasm`，它只装在验收服务端上，
+给原版金块一个 4000 / 10000 FE 的能量缓冲。
 
 场景可以带设置（`settings=`）、主题和锚点；设置相同的场景共用一次客户端启动，设置在启动前写进设置文件。
 每批结束会扫一遍服务端和客户端日志里 jade 相关的 panic / 错误。

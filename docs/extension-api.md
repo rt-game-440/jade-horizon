@@ -60,6 +60,6 @@ assets/<mod>/jade_providers/<名字>.json 客户端：从方块状态属性取�
 
 ## 建议的后续 issue
 
-1. 服务端读取 `horizon:energy`、`horizon:fluids`，显示能量条和储罐（需要一个注册了这些能力的测试 mod 或原版等价物来验收）。
+1. ~~服务端读取 `horizon:energy`、`horizon:fluids`，显示能量条和储罐~~ 已完成（#27）。能量用 `tests/fixture-energy` 夹具 mod（给原版金块一个能量缓冲）验收，流体用炼药锅验收。
 2. 数据驱动插件：先做服务端 NBT 版，规则格式就是上面的草案，再写一个示例数据包和文档。
 3. 关注 Horizon 是否开放跨 wasm mod 的 `[api]` 能力或 mod 间消息；开放后再设计代码级插件接口。

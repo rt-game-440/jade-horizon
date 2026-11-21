@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use mod_api::{Compound, PlayerRef, ServerHost, Tag};
 
 use crate::limit::Limiter;
-use crate::net::{KIND_BLOCK, KIND_ENTITY, NetItem, NetLine, NetProgress, NetTarget, Request, ServerData};
+use crate::net::{KIND_BLOCK, KIND_ENTITY, NetItem, NetLine, NetProgress, NetTank, NetTarget, Request, ServerData, TANK_ENERGY, TANK_FLUID};
 
 fn limiter() -> std::sync::MutexGuard<'static, Limiter> {
     static LIMITER: OnceLock<Mutex<Limiter>> = OnceLock::new();
@@ -43,10 +43,18 @@ pub fn collect(host: &mut dyn ServerHost, player: PlayerRef, target: &NetTarget)
             if dist2(eye, center) > MAX_DISTANCE * MAX_DISTANCE {
                 return None;
             }
-            let be = host.block_entity(level, pos)?;
-            let kind = be.kind(&*host).map(|k| k.id(&*host)).unwrap_or_default();
-            let nbt = be.data(&*host).unwrap_or_default();
-            block_entity(host, level, pos, &kind, &nbt, &mut data);
+            let be = host.block_entity(level, pos);
+            if let Some(be) = be {
+                let kind = be.kind(&*host).map(|k| k.id(&*host)).unwrap_or_default();
+                let nbt = be.data(&*host).unwrap_or_default();
+                block_entity(host, level, pos, &kind, &nbt, &mut data);
+            }
+            // 能量与流体能力按坐标查：炼药锅这类没有方块实体的方块也有流体能力。
+            tanks(host, level, pos, &mut data.tanks);
+            // 没有方块实体又没有储罐：没什么可回的，不浪费一个网络包。
+            if be.is_none() && data.tanks.is_empty() {
+                return None;
+            }
         }
         KIND_ENTITY => {
             let entity = host.entity(target.entity as u32)?;
@@ -194,6 +202,37 @@ fn storage_items(host: &mut dyn ServerHost, level: mod_api::LevelRef, pos: [i32;
         }
     }
     out
+}
+
+/// 一个方块最多回多少个流体储罐。
+const MAX_FLUID_TANKS: usize = 8;
+
+/// 通过 `horizon:energy` 与 `horizon:fluids` 能力读出能量缓冲和流体储罐。
+fn tanks(host: &mut dyn ServerHost, level: mod_api::LevelRef, pos: [i32; 3], out: &mut Vec<NetTank>) {
+    if let Some(energy) = level.capability(host, &mod_api::ENERGY, pos, None) {
+        let capacity = energy.capacity(host);
+        if capacity > 0 {
+            let amount = energy.amount(host);
+            out.push(NetTank { kind: TANK_ENERGY, id: String::new(), amount: clamp_count(amount), capacity: clamp_count(capacity) });
+        }
+    }
+    let Some(fluids) = level.capability(host, &mod_api::FLUIDS, pos, None) else {
+        return;
+    };
+    for index in 0..fluids.size(host).min(MAX_FLUID_TANKS) {
+        let Some(resource) = fluids.resource(host, index) else {
+            continue;
+        };
+        let amount = fluids.amount(host, index);
+        if amount == 0 {
+            continue;
+        }
+        let Some(key) = resource.fluid().key() else {
+            continue;
+        };
+        let capacity = fluids.capacity(host, index, &resource).max(amount);
+        out.push(NetTank { kind: TANK_FLUID, id: key.id(&*host), amount: clamp_count(amount), capacity: clamp_count(capacity) });
+    }
 }
 
 fn entity_data(kind: &str, nbt: &Compound, data: &mut ServerData) {

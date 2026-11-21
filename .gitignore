@@ -3,3 +3,6 @@
 /logs
 /mod.wasm
 __pycache__/
+/tests/fixture-energy/target
+/tests/fixture-energy/.horizon
+/tests/fixture-energy/mod.wasm

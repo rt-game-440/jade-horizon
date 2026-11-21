@@ -1,0 +1,13 @@
+id = "jadefixture"
+name = "Jade Energy Fixture"
+version = "0.1.0"
+description = "Test fixture: gives vanilla gold blocks an energy buffer so Jade's energy bar can be checked."
+authors = ["jade-horizon contributors"]
+license = "MIT"
+api = "0.2"
+side = "server"
+capabilities = ["registries"]
+
+[wasm]
+sha512 = "781312e1f38f00707c6a2c8d8628c6c178105315ba4320639bd718aa4c6ef308b4b219dd2a8dbd625387e56dcab6dd1a9aea2ea2fcb5ac5cb666183cfacded8a"
+toolchain = "1.99.1 58cf8f9c35b355199727627d07ae34a4e2846d67"
