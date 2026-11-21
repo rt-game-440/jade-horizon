@@ -47,6 +47,21 @@ pub struct NetProgress {
     pub total: i32,
 }
 
+/// 储罐种类：能量。
+pub const TANK_ENERGY: u8 = 0;
+/// 储罐种类：流体。
+pub const TANK_FLUID: u8 = 1;
+
+/// 一个能量缓冲或流体储罐：种类、流体注册名（能量为空）、当前量与容量。
+/// 能量单位为 FE，流体单位为 mB。
+#[derive(PayloadCodec, Clone, Debug, Default, PartialEq, Eq)]
+pub struct NetTank {
+    pub kind: u8,
+    pub id: String,
+    pub amount: i32,
+    pub capacity: i32,
+}
+
 /// 服务端 → 客户端：目标的服务端数据。
 #[derive(PayloadCodec, Clone, Debug, Default, PartialEq)]
 pub struct ServerData {
@@ -56,6 +71,8 @@ pub struct ServerData {
     /// 容器被锁或战利品未生成等情况。
     pub progress: Vec<NetProgress>,
     pub lines: Vec<NetLine>,
+    /// 能量缓冲与流体储罐。
+    pub tanks: Vec<NetTank>,
     /// 实体生命值与上限；客户端读不到生命值时用它。上限为 0 表示没有。
     pub health: f32,
     pub max_health: f32,
@@ -66,7 +83,7 @@ pub struct ServerData {
 pub const REQUEST_ID: &str = "jade:request";
 pub const DATA_ID: &str = "jade:server_data";
 /// 网络协议版本；两端不一致时视同对方没装本 mod。
-pub const PROTOCOL: &str = "3";
+pub const PROTOCOL: &str = "4";
 
 impl Request {
     /// 估算的网络字节数：目标（种类 + 4 个坐标）加 `fresh` 标记。
@@ -81,6 +98,7 @@ impl ServerData {
         let items = |v: &[NetItem]| v.iter().map(|i| i.id.len() + 4 + 2).sum::<usize>();
         let progress: usize = self.progress.iter().map(|p| items(&p.inputs) + items(&p.outputs) + 8 + 4).sum();
         let lines: usize = self.lines.iter().map(|l| l.key.len() + 2 + l.args.iter().map(|a| a.len() + 2).sum::<usize>()).sum();
-        (1 + 4 * 4) + items(&self.items) + progress + lines + 12
+        let tanks: usize = self.tanks.iter().map(|t| 1 + t.id.len() + 2 + 8).sum();
+        (1 + 4 * 4) + items(&self.items) + progress + lines + tanks + 12
     }
 }
