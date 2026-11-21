@@ -100,7 +100,7 @@ python -I tools/accept.py --update              # 重写全部基准
 python -I tools/accept.py --update --only chest # 只重写受影响的场景
 ```
 
-能量场景需要夹具 mod：先在 `tests/fixture-energy` 里运行一次 `cargo horizon-mod build --wasm`，它只装在验收服务端上，
+能量场景需要夹具 mod：夹具源码在 `tests/fixture-energy`（`tools/build_fixture.py` 构建，缺失时 `accept.py` 自动构建），它只装在验收服务端上，
 给原版金块一个 4000 / 10000 FE 的能量缓冲。
 
 场景可以带设置（`settings=`）、主题和锚点；设置相同的场景共用一次客户端启动，设置在启动前写进设置文件。

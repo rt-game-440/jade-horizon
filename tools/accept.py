@@ -36,8 +36,8 @@ Y = 150
 CLIENT = "Alice"
 WORK = ROOT / "target" / "accept"
 BASELINES = ROOT / "tests" / "baselines"
-# 能量夹具 mod（tests/fixture-energy，在该目录里 cargo horizon-mod build --wasm 构建）。
-FIXTURE = ROOT / "tests" / "fixture-energy" / "target" / "horizon-mod" / "jadefixture.hmod"
+# 能量夹具 mod（源码在 tests/fixture-energy，用 tools/build_fixture.py 构建）。
+FIXTURE = ROOT / "target" / "fixture-energy" / "target" / "horizon-mod" / "jadefixture.hmod"
 # 任一通道相差超过它的像素算“不同”，占提示框的比例超过 TOLERANCE 判为失败。
 # 同一场景重复截图的差异实测为 0.000%；单个数字变化约 0.23%，所以 0.1% 就能抓到。
 PIXEL_DELTA = 32
@@ -826,7 +826,9 @@ def main():
     if not HMOD.exists():
         sys.exit("缺少 target/horizon-mod/jade.hmod，先运行 cargo horizon-mod build --wasm")
     if not FIXTURE.exists():
-        sys.exit("缺少能量夹具 mod：在 tests/fixture-energy 里运行 cargo horizon-mod build --wasm")
+        from build_fixture import build
+
+        build()
 
     out = ROOT / "logs" / f"accept-{datetime.now():%Y-%m-%d %H-%M-%S}"
     out.mkdir(parents=True, exist_ok=True)
