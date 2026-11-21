@@ -1,6 +1,6 @@
 id = "jade"
 name = "Jade for Horizon"
-version = "0.1.0"
+version = "0.2.0"
 description = "Shows information about what you are looking at. An unofficial Rust port of Snownee's Jade to Horizon."
 authors = ["Snownee (original Jade)", "jade-horizon contributors"]
 license = "CC-BY-NC-SA-4.0"
