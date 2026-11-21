@@ -61,12 +61,12 @@ if the other side is missing or the version differs it is treated as not install
 In game: "Options > Mods > Jade":
 
 - Master switch, anchor (top centre / top left / top right / middle left / middle right), horizontal and vertical offset, background opacity
-- Theme: Vanilla, Dark, Light, High contrast (text/background contrast of at least 4.5:1)
+- Theme: Classic (Vanilla-like), Dark, Light, High contrast (text/background contrast of at least 4.5:1)
 - Animation: fade when the target changes, smooth size transitions
 - Per-item toggles: health, armor, potions, horse stats, villagers, owner, container contents, furnace progress, crops, redstone, harvest tool and progress, fluids, drops, mod name
 - Debug stats: when on, network counters are written to `horizon-mod-data/jade/perf.json` every 10 seconds (used by `tools/perf.py`; off by default)
 
-Two key bindings are under "Controls": `Show/Hide tooltip` (default Numpad 1, runtime toggle, resets on restart) and `Toggle fluid display` (default Numpad 2).
+Two key bindings are under "Controls": `Show Overlay` (default Numpad 1, runtime toggle, resets on restart) and `Toggle Fluid` (default Numpad 2).
 While the tooltip is hidden nothing is assembled and no requests are sent. Scaling is not implemented: Horizon's `DrawContext` has no scaling and item icons cannot be drawn with a transform.
 
 ## Building
