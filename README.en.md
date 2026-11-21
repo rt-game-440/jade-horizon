@@ -32,7 +32,9 @@ and add the line `mod.jade:true` to `horizon-mods.txt`.
 - Multiplayer: installing on the client gives you the basic features; install on the server too to see server-side data such as container contents and furnace progress.
   The manifest says `side = "client"`, so Horizon does not compare jade when joining a server and you can join with only one side installed (verified on a dedicated server).
   The trade-off: the game will not refuse a join when the two sides have different versions. A side with a mismatched protocol version treats the other side as "not installed" and shows client-only information.
-- Singleplayer: client installation is enough. Whether the integrated server also loads a `side = "client"` package (which decides whether container contents are visible) has not been tested yet.
+- Singleplayer: client installation is enough. The integrated server runs in the same process, and the items that need
+  server-side data show up there as well — container contents and furnace progress were verified on nightly-2026-11-19 `5ef7734`
+  (see `tools/sp.py`).
 
 ## Features
 
@@ -104,6 +106,7 @@ They require an installed Horizon launcher. Usage is documented in detail in the
 
 ```powershell
 python -I tools/accept.py      # pixel-compare all scenarios (--update to rewrite baselines, --only <name> to filter)
+python -I tools/sp.py          # singleplayer check: does the integrated server serve jade's server-side data?
 python -I tools/e2e_mp.py      # two-client multiplayer end-to-end
 python -I tools/perf.py        # performance baseline comparison
 python -I tools/ui_check.py    # screenshots of the settings page and animation for visual review
