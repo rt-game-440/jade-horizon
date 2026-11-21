@@ -85,3 +85,16 @@ fn game_keys_are_not_shadowed() {
         assert!(shadowed.is_empty(), "{lang}.json 不该抄游戏提供的键：{shadowed:?}");
     }
 }
+
+/// 设置页与按键设置里用到的翻译键（设置表、按键标签）也必须两种语言都有。
+#[test]
+fn config_keys_exist() {
+    let used = crate::config::label_keys();
+    assert!(used.len() > 20, "设置表的键太少：{used:?}");
+    for lang in ["en_us", "zh_cn"] {
+        let have = keys_in(lang);
+        let mut missing: Vec<_> = used.iter().filter(|k| !have.contains(*k)).collect();
+        missing.sort();
+        assert!(missing.is_empty(), "{lang}.json 缺少设置键：{missing:?}");
+    }
+}

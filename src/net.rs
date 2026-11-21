@@ -67,3 +67,20 @@ pub const REQUEST_ID: &str = "jade:request";
 pub const DATA_ID: &str = "jade:server_data";
 /// 网络协议版本；两端不一致时视同对方没装本 mod。
 pub const PROTOCOL: &str = "3";
+
+impl Request {
+    /// 估算的网络字节数：目标（种类 + 4 个坐标）加 `fresh` 标记。
+    pub fn wire_size(&self) -> usize {
+        1 + 4 * 4 + 1
+    }
+}
+
+impl ServerData {
+    /// 估算的网络字节数：字符串长度加每个字段的固定开销。
+    pub fn wire_size(&self) -> usize {
+        let items = |v: &[NetItem]| v.iter().map(|i| i.id.len() + 4 + 2).sum::<usize>();
+        let progress: usize = self.progress.iter().map(|p| items(&p.inputs) + items(&p.outputs) + 8 + 4).sum();
+        let lines: usize = self.lines.iter().map(|l| l.key.len() + 2 + l.args.iter().map(|a| a.len() + 2).sum::<usize>()).sum();
+        (1 + 4 * 4) + items(&self.items) + progress + lines + 12
+    }
+}

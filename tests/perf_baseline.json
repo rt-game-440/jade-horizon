@@ -1,0 +1,18 @@
+{
+  "max_requests_per_second": 2.5,
+  "absolute_limit_ms": 1.0,
+  "targets": {
+    "chest": {
+      "delta_avg_ms": 0.10602147360918823,
+      "noise_ms": 0.07266691684722909,
+      "threshold_ms": 0.2513553073036464,
+      "requests_per_second": 2.0
+    },
+    "furnace": {
+      "delta_avg_ms": 0.17023204959871252,
+      "noise_ms": 0.032973924466673576,
+      "threshold_ms": 0.23617989853205967,
+      "requests_per_second": 2.031099124296607
+    }
+  }
+}

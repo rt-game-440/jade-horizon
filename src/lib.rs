@@ -6,11 +6,12 @@
 use std::sync::OnceLock;
 
 use mod_api::{
-    self, ClientHost, ClientTickPostEvent, GuiRenderPostEvent, Hooks, HudMode, PayloadId, PlayerLoggedInEvent, PlayerLoggedOutEvent,
+    self, ClientHost, ClientTickPostEvent, GuiRenderPostEvent, Hooks, HudMode, KeyRegistration, PayloadId, PlayerLoggedInEvent, PlayerLoggedOutEvent,
     Registrar, RegistrationContext, ServerHost, ToClient, ToServer,
 };
 
 mod client;
+mod config;
 mod dropped;
 mod fluid;
 mod harvest;
@@ -20,6 +21,7 @@ mod limit;
 mod net;
 mod render;
 mod server;
+mod stats;
 
 use net::{DATA_ID, PROTOCOL, REQUEST_ID, Request, ServerData};
 
@@ -32,11 +34,18 @@ struct Jade;
 #[mod_api::horizon_mod]
 impl Hooks for Jade {
     fn register(&self, r: &mut dyn Registrar, cx: &RegistrationContext) {
+        // 设置只在客户端用；专用服务端上同样登记（只是存着不用），登记失败不影响启动。
+        for spec in config::specs() {
+            let _ = r.register_setting(spec);
+        }
         for package in cx.mods().iter() {
             for ns in package.namespaces() {
                 client::set_mod_name(ns, package.name());
             }
             client::set_mod_name(package.id(), package.name());
+        }
+        for (id, key, label) in config::KEYS {
+            r.register_key_mapping(KeyRegistration::new(id, key).label(label));
         }
         let mut payloads = r.payload_handlers();
         // optional：对方没装本 mod 时照常进服，只是没有服务端数据。
@@ -63,6 +72,10 @@ impl Hooks for Jade {
         let _ = TO_CLIENT.set(to_client);
     }
 
+    fn setting_changed(&self, _host: &mut dyn ClientHost, _event: &mut mod_api::SettingChangedEvent<'_>) {
+        config::mark_stale();
+    }
+
     fn client_mining_predict(
         &self,
         _host: &dyn ClientHost,
@@ -76,9 +89,12 @@ impl Hooks for Jade {
         if let Some(request) = client::tick(host) {
             if let Some(token) = TO_SERVER.get() {
                 // 服务端没装本 mod 时返回 UnsupportedPeer，忽略。
-                let _ = token.send(host, &request);
+                if token.send(host, &request).is_ok() {
+                    stats::record_request(request.wire_size());
+                }
             }
         }
+        stats::flush(host, config::current().debug_stats);
     }
 
     fn player_logged_in(&self, _host: &mut dyn ServerHost, event: &mut PlayerLoggedInEvent<'_>) {
@@ -93,8 +109,7 @@ impl Hooks for Jade {
         if event.gui_hidden || host.hud_mode() != HudMode::AllVisible || host.observed_screen_id().is_some() {
             return;
         }
-        if let Some(tip) = client::current() {
-            render::draw(event.batch, &tip);
-        }
+        // 没有提示框时也要调：让淡出画完。
+        render::draw(event.batch, client::current().as_ref(), &config::current(), host.millis());
     }
 }

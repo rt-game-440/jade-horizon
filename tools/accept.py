@@ -66,7 +66,8 @@ def yaw_pitch(x, y, z):
     return math.degrees(math.atan2(-dx, dz)), math.degrees(math.atan2(-dy, math.hypot(dx, dz)))
 
 
-def scene(name, setup=(), look=None, actions=(), frozen=(), wait=1.5):
+def scene(name, setup=(), look=None, actions=(), frozen=(), wait=1.5, settings=None, install="both",
+          theme="classic", anchor="top_center", expect="visible", after=(), check=None):
     """一个场景：搭建命令、看的目标、截图前的输入动作、冻结后固定动态值的命令。"""
     return {
         "name": name,
@@ -75,6 +76,19 @@ def scene(name, setup=(), look=None, actions=(), frozen=(), wait=1.5):
         "actions": list(actions),
         "frozen": list(frozen),
         "wait": wait,
+        # 启动客户端前写入的设置（键 -> 值）；设置相同的场景放在同一批里共用一次启动。
+        "settings": dict(settings or {}),
+        # mod 安装组合：both（默认）、client_only（服务端不装）、server_only（客户端不装）。
+        "install": install,
+        # 提示框的配色与锚点，决定在截图里怎么把它找出来。
+        "theme": theme,
+        "anchor": anchor,
+        # visible：截图里要有提示框并与基准比对；hidden：不该有提示框，不比对。
+        "expect": expect,
+        # 截完图之后的输入动作（比如把按键开关按回去）。
+        "after": list(after),
+        # 不截图的场景：check(ctl, srv, r) -> (是否通过, 说明)。
+        "check": check,
     }
 
 
@@ -113,6 +127,17 @@ BREWING_NBT = (
     '{Items:[{Slot:0b,id:"minecraft:potion",count:1},{Slot:3b,id:"minecraft:nether_wart",count:4},'
     '{Slot:4b,id:"minecraft:blaze_powder",count:2}],BrewTime:200s,Fuel:15b}'
 )
+
+def offline_uuid_ints(name):
+    """离线模式玩家的 UUID（md5("OfflinePlayer:名字")），写成 NBT 的 [I;a,b,c,d]。"""
+    import hashlib
+    import struct
+
+    raw = bytearray(hashlib.md5(f"OfflinePlayer:{name}".encode()).digest())
+    raw[6] = raw[6] & 0x0F | 0x30
+    raw[8] = raw[8] & 0x3F | 0x80
+    return ",".join(str(v) for v in struct.unpack(">4i", bytes(raw)))
+
 
 SCENES = [
     scene(
@@ -292,6 +317,105 @@ SCENES = [
         ],
         look=point(0, Y + 1, -4.4),
     ),
+    # ---- 挖掘等级：铁矿要石镐以上，钻石矿要铁镐以上 ----
+    scene(
+        "harvest_iron_stone",
+        setup=[f"setblock 0 {Y + 1} 3 minecraft:iron_ore"],
+        look=block(0, Y + 1, 3),
+        actions=["give minecraft:stone_pickaxe", "select minecraft:stone_pickaxe", "wait 0.5"],
+    ),
+    scene(
+        "harvest_iron_iron",
+        setup=[f"setblock 0 {Y + 1} 3 minecraft:iron_ore"],
+        look=block(0, Y + 1, 3),
+        actions=["give minecraft:iron_pickaxe", "select minecraft:iron_pickaxe", "wait 0.5"],
+    ),
+    scene(
+        "harvest_diamond_stone",
+        setup=[f"setblock 0 {Y + 1} 3 minecraft:diamond_ore"],
+        look=block(0, Y + 1, 3),
+        actions=["give minecraft:stone_pickaxe", "select minecraft:stone_pickaxe", "wait 0.5"],
+    ),
+    # ---- 主人（Alice 驯服的宠物）、物品展示框、有限时长的药水效果 ----
+    scene(
+        "wolf_owner",
+        setup=[f"summon minecraft:wolf -1.5 {Y + 1} -2.5 {{NoAI:1b,Silent:1b,Owner:[I;{offline_uuid_ints(CLIENT)}]}}"],
+        look=entity("minecraft:wolf"),
+        actions=["key shift down"],
+    ),
+    scene(
+        "cat_owner",
+        setup=[f"summon minecraft:cat -1.5 {Y + 1} -2.5 {{NoAI:1b,Silent:1b,Owner:[I;{offline_uuid_ints(CLIENT)}]}}"],
+        look=entity("minecraft:cat"),
+        actions=["key shift down"],
+    ),
+    scene(
+        "item_frame",
+        setup=[
+            f"setblock 0 {Y + 1} -5 minecraft:stone",
+            f"summon minecraft:item_frame 0 {Y + 1} -4 {{Facing:3b,Item:{{id:\"minecraft:diamond\",count:1}}}}",
+        ],
+        look=point(0, Y + 1, -4.4),
+    ),
+    scene(
+        "potion_timed",
+        setup=[
+            f"summon minecraft:zombie -1.5 {Y + 1} -2.5 {{NoAI:1b,Silent:1b,PersistenceRequired:1b,"
+            'active_effects:[{id:"minecraft:regeneration",amplifier:0b,duration:1200}]}'
+        ],
+        look=entity("minecraft:zombie"),
+        frozen=[
+            "data merge entity @e[type=minecraft:zombie,limit=1] "
+            '{Health:14f,active_effects:[{id:"minecraft:regeneration",amplifier:0b,duration:1200}]}'
+        ],
+    ),
+    # ---- 按键开关（#12）：按一次消失，再按一次回来 ----
+    scene(
+        "overlay_key_hidden",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_NBT}"],
+        look=block(-3, Y + 1, 0),
+        actions=["key key.keyboard.keypad.1 tap", "wait 0.8"],
+        after=["key key.keyboard.keypad.1 tap"],
+        expect="hidden",
+    ),
+    scene(
+        "overlay_key_restored",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_NBT}"],
+        look=block(-3, Y + 1, 0),
+        actions=["key key.keyboard.keypad.1 tap", "wait 0.5", "key key.keyboard.keypad.1 tap", "wait 0.8"],
+    ),
+    # ---- 设置（#11、#14）：启动前写好设置，同样设置的场景共用一次启动 ----
+    scene(
+        "setting_disabled",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_NBT}"],
+        look=block(-3, Y + 1, 0),
+        settings={"enabled": False},
+        expect="hidden",
+    ),
+    scene(
+        "theme_light",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_NBT}"],
+        look=block(-3, Y + 1, 0),
+        settings={"theme": 2},
+        theme="light",
+    ),
+    scene(
+        "theme_high_contrast",
+        setup=[f"setblock 3 {Y + 1} 0 minecraft:furnace[facing=west,lit=true]{FURNACE_NBT}"],
+        look=block(3, Y + 1, 0),
+        frozen=[f"data merge block 3 {Y + 1} 0 {{cooking_time_spent:80s,cooking_total_time:200s}}"],
+        settings={"theme": 3},
+        theme="high_contrast",
+    ),
+    scene(
+        "anchor_top_left",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_NBT}"],
+        look=block(-3, Y + 1, 0),
+        settings={"anchor": 1},
+        anchor="top_left",
+    ),
+    # mod 安装组合（#19）：试过“只装客户端”“只装服务端”，Horizon 的 mod 握手都直接拒绝进服
+    # （Your mods don't match this server's），side = "both" 的 mod 没法做这两种组合，所以没有对应场景。
 ]
 
 # 截图前一刻 /tick freeze，截完立即 /tick unfreeze。
@@ -322,8 +446,17 @@ def server_time(srv):
     return int(digits) if digits else None
 
 
-def launch(ctl, srv, resources, offscreen=True):
-    """建服务端目录、装 jade、起服务端，再离屏起一个客户端进服。"""
+def server_running(srv):
+    code, text = srv("status", "--json", timeout=30)
+    try:
+        phase = json.loads(text.splitlines()[-1]).get("phase", "")
+    except Exception:
+        phase = ""
+    return code == 0 and phase == "running"
+
+
+def start_server(srv, resources, jade=True):
+    """建服务端目录、按需装 jade 并启动。已经按同样方式在跑就什么也不做，否则重启。"""
     sdir = WORK / "server"
     sdir.mkdir(parents=True, exist_ok=True)
     if not (sdir / "server.toml").exists():
@@ -341,6 +474,14 @@ def launch(ctl, srv, resources, offscreen=True):
             "--yes",
             timeout=300,
         )
+    # 记下模式和 mod 文件的修改时间：mod 重新构建过也要重启服务端才会加载新版。
+    mode = f"{'jade' if jade else 'vanilla'}:{HMOD.stat().st_mtime_ns}"
+    marker = sdir / ".jade-mode"
+    running = server_running(srv)
+    if running and marker.exists() and marker.read_text(encoding="utf-8") == mode:
+        return
+    if running:
+        srv("stop", timeout=120)
     srv(
         "config",
         "set",
@@ -349,27 +490,32 @@ def launch(ctl, srv, resources, offscreen=True):
         f"server.port={PORT}",
         "world.difficulty=normal",
     )
+    # 只装客户端的批次里世界存档记着 jade、服务端却没装：允许缺 mod 照样开服。
+    toml = sdir / "server.toml"
+    text = toml.read_text(encoding="utf-8")
+    if "[missing_mods]" not in text:
+        toml.write_text(text.rstrip() + "\n\n[missing_mods]\nallow = true\n", encoding="utf-8")
     (sdir / "horizon-mods").mkdir(exist_ok=True)
     shutil.copy2(HMOD, sdir / "horizon-mods" / "jade.hmod")
-    (sdir / "horizon-mods.txt").write_text("mod.jade:true\n", encoding="utf-8")
+    (sdir / "horizon-mods.txt").write_text(f"mod.jade:{'true' if jade else 'false'}\n", encoding="utf-8")
+    marker.write_text(mode, encoding="utf-8")
     srv("op", CLIENT)
 
     srv("start", timeout=120, check=True)
     for _ in range(180):
-        code, text = srv("status", "--json", timeout=30)
-        try:
-            phase = json.loads(text.splitlines()[-1]).get("phase", "")
-        except Exception:
-            phase = ""
-        if code == 0 and phase == "running":
+        if server_running(srv):
             break
         time.sleep(1)
     else:
         raise RuntimeError("服务端 180 秒内没起来")
 
+
+def start_client(ctl, resources, offscreen=True, settings=None, with_mod=True):
+    """起一个客户端进服。`settings` 是启动前写好的 jade 设置；`with_mod` 为 False 时不装 jade。"""
     gdir = WORK / "alice"
     gdir.mkdir(parents=True, exist_ok=True)
     prepare_options(gdir)
+    reset_settings(gdir, settings)
     ctl(
         "launch",
         *(["--offscreen"] if offscreen else []),
@@ -384,8 +530,7 @@ def launch(ctl, srv, resources, offscreen=True):
         gdir,
         "--resources",
         resources,
-        "--dev-mod",
-        HMOD,
+        *(["--dev-mod", HMOD] if with_mod else []),
         "--width",
         "1280",
         "--height",
@@ -396,6 +541,9 @@ def launch(ctl, srv, resources, offscreen=True):
         check=True,
     )
     ctl("wait-ready", "120", timeout=150)
+
+
+def setup_world(srv):
     for command in [
         # 26.3 的 gamerule 名是下划线形式：doDaylightCycle → advance_time，doMobSpawning → spawn_mobs。
         "gamerule advance_time false",
@@ -410,6 +558,33 @@ def launch(ctl, srv, resources, offscreen=True):
     srv("cmd", "gamemode creative Alice")
     srv("cmd", f"tp Alice 0.5 {Y + 1} 0.5")
     time.sleep(1)
+
+
+def launch(ctl, srv, resources, offscreen=True, settings=None, install="both"):
+    """起服务端（按 install 决定装不装 jade），再离屏起一个客户端进服并搭好场地。"""
+    start_server(srv, resources, jade=install != "client_only")
+    start_client(ctl, resources, offscreen, settings, with_mod=install != "server_only")
+    setup_world(srv)
+
+
+def setting_dir(gdir):
+    """游戏把 jade 的设置存成这个目录下每个键一个文本文件（值的写法见 SettingSpec::store）。"""
+    return gdir / "horizon-mods" / ".horizon-mod-data" / "jade"
+
+
+def set_setting(gdir, key, value):
+    """写一项设置。必须在启动客户端前写：直接写文件不会触发 setting_changed。"""
+    d = setting_dir(gdir)
+    d.mkdir(parents=True, exist_ok=True)
+    text = str(value).lower() if isinstance(value, bool) else str(value)
+    (d / key).write_text(text, encoding="utf-8")
+
+
+def reset_settings(gdir, settings=None):
+    """清掉上次留下的设置，再写入这次要用的（默认全部用默认值）。"""
+    shutil.rmtree(setting_dir(gdir), ignore_errors=True)
+    for key, value in (settings or {}).items():
+        set_setting(gdir, key, value)
 
 
 def prepare_options(gdir):
@@ -466,7 +641,7 @@ def look_at(ctl, target, r):
 
 
 def capture(ctl, srv, sc, out, r, freeze):
-    """跑一个场景并截图，返回裁剪出的提示框图；没看到提示框返回 None。"""
+    """跑一个场景并截图，返回裁剪出的提示框图；没看到提示框返回 None。截图本身存在 out/<场景>-screen.png。"""
     name = sc["name"]
     reset(srv)
     for command in sc["setup"]:
@@ -499,12 +674,14 @@ def capture(ctl, srv, sc, out, r, freeze):
     ctl("screenshot", shot, timeout=60)
     if freeze:
         srv("cmd", UNFREEZE_COMMAND)
+    for action in sc["after"]:
+        ctl(*action.split(), timeout=30)
     ctl("release", timeout=30)
 
     if not shot.exists():
         r.note(f"{name}: 截图没生成")
         return None
-    return crop_tooltip(Image.open(shot))
+    return crop_tooltip(Image.open(shot), theme=sc["theme"], anchor=sc["anchor"])
 
 
 def compare(actual, baseline):
@@ -522,6 +699,67 @@ def compare(actual, baseline):
     gray = a.convert("L").point(lambda v: v // 3)
     diff_image = Image.composite(Image.new("RGB", actual.size, (255, 0, 0)), Image.merge("RGB", (gray, gray, gray)), hot)
     return ratio <= TOLERANCE, ratio, diff_image
+
+
+def check_joined(ctl):
+    """客户端已经进服、能正常玩（没装 jade 也一样）。"""
+    code, text = ctl("state", timeout=30)
+    return code == 0 and '"error"' not in text, text[:200]
+
+
+def scan_logs():
+    """服务端和客户端日志里和 jade 有关的 panic / 错误行。"""
+    bad = []
+    for path in (WORK / "server" / "logs" / "latest.log", WORK / "alice" / "logs" / "latest.log"):
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            low = line.lower()
+            if "panicked" in low or "wasm trap" in low or ("jade" in low and any(w in low for w in ("error", "failed", "exception"))):
+                bad.append(f"{path.parent.parent.name}: {line.strip()[:200]}")
+    return bad
+
+
+def batches_of(scenes):
+    """按（安装组合, 设置）分批：同一批的场景共用一次客户端启动。"""
+    out = {}
+    for sc in scenes:
+        out.setdefault((sc["install"], tuple(sorted(sc["settings"].items()))), []).append(sc)
+    return list(out.items())
+
+
+def run_scene(ctl, srv, sc, out, r, freeze, update, results):
+    name = sc["name"]
+    r.note(f"场景 {name} …")
+    if sc["check"]:
+        ok, text = sc["check"](ctl, srv, r)
+        results[name] = "通过" if ok else f"失败（{text}）"
+        r.note(f"{name}: {results[name]}")
+        return
+    actual = capture(ctl, srv, sc, out, r, freeze)
+    if sc["expect"] == "hidden":
+        shot_ok = (out / f"{name}-screen.png").exists()
+        results[name] = "通过" if shot_ok and actual is None else "失败（不该有提示框）"
+        r.note(f"{name}: {results[name]}")
+        return
+    if actual is None:
+        results[name] = "没有 Jade 提示框"
+        r.note(f"{name}: 没有 Jade 提示框")
+        return
+    actual.save(out / f"{name}.png")
+    baseline_path = BASELINES / f"{name}.png"
+    if update or not baseline_path.exists():
+        actual.save(baseline_path)
+        results[name] = "已写基准" if update else "已写基准（原来没有）"
+        r.note(f"{name}: 基准 -> {baseline_path}")
+        return
+    ok, ratio, diff_image = compare(actual, Image.open(baseline_path))
+    results[name] = "通过" if ok else f"失败（{ratio:.1%} 不同）"
+    r.note(f"{name}: {'通过' if ok else '失败'}，不同像素 {ratio:.3%}")
+    if not ok:
+        actual.save(out / f"{name}-actual.png")
+        if diff_image is not None:
+            diff_image.save(out / f"{name}-diff.png")
 
 
 def main():
@@ -549,34 +787,28 @@ def main():
     srv = lambda *args, **kw: r.run([server_exe, "--dir", WORK / "server", *args], **kw)  # noqa: E731
     ctl = lambda *args, **kw: r.run([ctl_exe, "--socket", WORK / "alice.sock", *args], **kw)  # noqa: E731
 
-    results, freeze = {}, False
+    results, freeze, client_up = {}, None, False
     try:
-        launch(ctl, srv, resources)
-        freeze, before, first, second = freeze_supported(srv)
-        stopped = "停住" if first == second else "仍在走"
-        r.note(f"/tick freeze {'可用' if freeze else '不可用'}；冻结期间服务端游戏时间 {first} -> {second}（{stopped}）")
-        for sc in scenes:
-            name = sc["name"]
-            r.note(f"场景 {name} …")
-            actual = capture(ctl, srv, sc, out, r, freeze)
-            if actual is None:
-                results[name] = "没有 Jade 提示框"
-                r.note(f"{name}: 没有 Jade 提示框")
-                continue
-            actual.save(out / f"{name}.png")
-            baseline_path = BASELINES / f"{name}.png"
-            if update or not baseline_path.exists():
-                actual.save(baseline_path)
-                results[name] = "已写基准" if update else "已写基准（原来没有）"
-                r.note(f"{name}: 基准 -> {baseline_path}")
-                continue
-            ok, ratio, diff_image = compare(actual, Image.open(baseline_path))
-            results[name] = "通过" if ok else f"失败（{ratio:.1%} 不同）"
-            r.note(f"{name}: {'通过' if ok else '失败'}，不同像素 {ratio:.3%}")
-            if not ok:
-                actual.save(out / f"{name}-actual.png")
-                if diff_image is not None:
-                    diff_image.save(out / f"{name}-diff.png")
+        for (install, settings), batch in batches_of(scenes):
+            label = f"{install}" + (f" {dict(settings)}" if settings else "")
+            r.note(f"== 一批场景：{label}，共 {len(batch)} 个 ==")
+            if client_up:
+                ctl("quit", timeout=60)
+                client_up = False
+                time.sleep(3)
+            launch(ctl, srv, resources, install=install, settings=dict(settings))
+            client_up = True
+            if freeze is None:
+                freeze, before, first, second = freeze_supported(srv)
+                stopped = "停住" if first == second else "仍在走"
+                r.note(f"/tick freeze {'可用' if freeze else '不可用'}；冻结期间服务端游戏时间 {first} -> {second}（{stopped}）")
+            for sc in batch:
+                run_scene(ctl, srv, sc, out, r, freeze, update, results)
+            bad = scan_logs()
+            key = f"日志[{label}]"
+            results[key] = "通过" if not bad else f"失败（{len(bad)} 行）"
+            for line in bad[:10]:
+                r.note(key, line)
     except Exception as e:
         r.note("出错:", e)
         results["__error__"] = str(e)
@@ -594,7 +826,7 @@ def main():
             r.note("保留服务端和客户端（--keep）：", WORK)
 
     lines = [f"accept {datetime.now():%Y-%m-%d %H:%M:%S}", f"freeze: {freeze}"]
-    for name in [s["name"] for s in scenes] + [k for k in results if k == "__error__"]:
+    for name in [s["name"] for s in scenes] + [k for k in results if k.startswith(("日志[", "__error__"))]:
         if name in results:
             lines.append(f"{name}: {results[name]}")
     (out / "report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
