@@ -103,7 +103,8 @@ cargo horizon-mod check
 ## In-game acceptance, multiplayer e2e and performance baseline
 
 These tools drive a real Horizon client and server (screenshot diffing against `tests/baselines/`, two-client e2e, CPU/request-rate baseline).
-They require an installed Horizon launcher. Usage is documented in detail in the [Chinese README](README.md#游戏内验收); the entry points are:
+They require an installed Horizon launcher, and they all use an offscreen client (`--offscreen`): with a windowed client,
+`horizon-ctl screenshot` hangs once the window is minimised (upstream horizon-rust/horizon#19436). Usage is documented in detail in the [Chinese README](README.md#游戏内验收); the entry points are:
 
 ```powershell
 python -I tools/accept.py      # pixel-compare all scenarios (--update to rewrite baselines, --only <name> to filter)

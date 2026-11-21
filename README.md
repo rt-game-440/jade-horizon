@@ -108,7 +108,10 @@ cargo horizon-mod check
 
 ## 游戏内验收
 
-需要已安装 Horizon 启动器（并且没开 No AI）。脚本会构建一个装了 jade 的专用服务端，
+需要已安装 Horizon 启动器（并且没开 No AI）。脚本都走离屏客户端（`--offscreen`）：窗口客户端一旦被最小化，
+`horizon-ctl screenshot` 就会挂死（上游 horizon-rust/horizon#19436），离屏客户端不受影响。
+
+脚本会构建一个装了 jade 的专用服务端，
 再离屏启动一个客户端进服，在 y=150 搭平台、逐个场景摆方块和生物，对准后截图，
 裁出顶部的 Jade 提示框并与 `tests/baselines/` 里的基准图逐像素比对：
 
