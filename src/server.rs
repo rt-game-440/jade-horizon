@@ -199,8 +199,8 @@ fn storage_items(host: &mut dyn ServerHost, level: mod_api::LevelRef, pos: [i32;
 fn entity_data(kind: &str, nbt: &Compound, data: &mut ServerData) {
     // 幼年生物的成长时间，成年动物的繁殖冷却（Age 字段，单位 tick）。
     // 掉落物的 Age 是存在时间，不是成长/繁殖冷却。
-    let aged = kind != "minecraft:item";
-    if let Some(age) = cget(nbt, "Age").and_then(tag_int).filter(|_| aged) {
+    let has_growth_age = kind != "minecraft:item";
+    if let Some(age) = cget(nbt, "Age").and_then(tag_int).filter(|_| has_growth_age) {
         if age < 0 {
             data.lines.push(line("jade.mobgrowth.time", [ticks_text(-age)]));
         } else if age > 0 {

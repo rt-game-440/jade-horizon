@@ -151,6 +151,22 @@ SCENES = [
         setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_NBT}"],
         look=block(-3, Y + 1, 0),
     ),
+    # 单端安装（manifest 里 side = "client"，进服时不比对 jade）：
+    # 只装客户端也能进服，提示框只有客户端知道的名字和图标，没有箱子内容；
+    # 只装服务端时客户端没有 jade，进服正常、不画提示框。
+    scene(
+        "chest_client_only",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_NBT}"],
+        look=block(-3, Y + 1, 0),
+        install="client_only",
+    ),
+    scene(
+        "chest_server_only",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_NBT}"],
+        look=block(-3, Y + 1, 0),
+        install="server_only",
+        expect="hidden",
+    ),
     scene(
         "chest_more",
         setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_MORE_NBT}"],
@@ -510,11 +526,11 @@ def start_server(srv, resources, jade=True):
         raise RuntimeError("服务端 180 秒内没起来")
 
 
-def start_client(ctl, resources, offscreen=True, settings=None, with_mod=True):
+def start_client(ctl, resources, offscreen=True, settings=None, with_mod=True, lang="en_us"):
     """起一个客户端进服。`settings` 是启动前写好的 jade 设置；`with_mod` 为 False 时不装 jade。"""
     gdir = WORK / "alice"
     gdir.mkdir(parents=True, exist_ok=True)
-    prepare_options(gdir)
+    prepare_options(gdir, lang)
     reset_settings(gdir, settings)
     ctl(
         "launch",
@@ -560,10 +576,10 @@ def setup_world(srv):
     time.sleep(1)
 
 
-def launch(ctl, srv, resources, offscreen=True, settings=None, install="both"):
+def launch(ctl, srv, resources, offscreen=True, settings=None, install="both", lang="en_us"):
     """起服务端（按 install 决定装不装 jade），再离屏起一个客户端进服并搭好场地。"""
     start_server(srv, resources, jade=install != "client_only")
-    start_client(ctl, resources, offscreen, settings, with_mod=install != "server_only")
+    start_client(ctl, resources, offscreen, settings, with_mod=install != "server_only", lang=lang)
     setup_world(srv)
 
 
@@ -587,16 +603,17 @@ def reset_settings(gdir, settings=None):
         set_setting(gdir, key, value)
 
 
-def prepare_options(gdir):
+def prepare_options(gdir, lang="en_us"):
     """关掉新手提示和聊天框：它们画在屏幕上方，会压住提示框或混进顶层截图。
 
     tutorialStep=none 决定加入世界时还给不给“Move with WASD / Jump with Space”提示；
     chatVisibility=2 隐藏聊天框（服务端命令的回显也在里面）。
+    lang 每次都写死：基准图是英文的，手动在游戏里切过语言也不能影响验收。
     """
     path = gdir / "options.txt"
     lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-    lines = [l for l in lines if not l.startswith(("tutorialStep:", "chatVisibility:"))]
-    lines += ["tutorialStep:none", "chatVisibility:2"]
+    lines = [l for l in lines if not l.startswith(("tutorialStep:", "chatVisibility:", "lang:"))]
+    lines += ["tutorialStep:none", "chatVisibility:2", f"lang:{lang}"]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
