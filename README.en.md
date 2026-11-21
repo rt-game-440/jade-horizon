@@ -111,3 +111,5 @@ python -I tools/ui_check.py    # screenshots of the settings page and animation 
 - This port rewrites part of Jade's functionality in Rust on the Horizon mod API; layout and displayed content follow the original.
   The language files under `assets/jade/lang/` are taken directly from Jade (branch 26.3-neoforge); translations belong to Jade and its translators.
 - This project is also released under CC BY-NC-SA 4.0 (see `LICENSE.md`) and must not be used commercially.
+- Approved by the original author: on 2026-11-21 we asked in [Snownee/Jade#847](https://github.com/Snownee/Jade/issues/847) about public release, keeping the name and the attribution wording,
+  and Snownee replied (in Chinese) "Sure. I hope you keep it updated." This remains an unofficial port, and we will comply with any change the original author requests.

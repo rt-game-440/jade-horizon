@@ -175,3 +175,5 @@ python -I tools/perf.py --update-baseline  # 在本机重写基线
 - 本移植用 Rust 在 Horizon mod API 上重写了 Jade 的部分功能，界面布局与显示内容参照原作；
   `assets/jade/lang/` 下的语言文件直接取自 Jade（26.3-neoforge 分支），翻译归 Jade 及其译者所有。
 - 本项目同样以 CC BY-NC-SA 4.0 发布（见 `LICENSE.md`），不得用于商业目的。
+- 已征得原作者同意：2026-11-21 在 [Snownee/Jade#847](https://github.com/Snownee/Jade/issues/847) 询问公开发布、沿用名称与署名方式，
+  Snownee 回复“可以。希望你能保持更新。”本项目仍是非官方作品，原作者如有调整要求会照办。
