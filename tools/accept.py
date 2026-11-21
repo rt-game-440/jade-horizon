@@ -461,6 +461,65 @@ SCENES = [
         settings={"anchor": 1},
         anchor="top_left",
     ),
+    # ---- #31：常用小提示 ----
+    scene(
+        "sign_waxed",
+        setup=[
+            f"setblock -3 {Y + 1} 0 minecraft:oak_sign[rotation=4]"
+            '{is_waxed:1b,front_text:{messages:["Hello","Jade","",""]},back_text:{messages:["Back side","","",""]}}'
+        ],
+        look=block(-3, Y + 1, 0),
+    ),
+    scene(
+        "zombie_villager",
+        setup=[f"summon minecraft:zombie_villager -1.5 {Y + 1} -2.5 {{NoAI:1b,Silent:1b,PersistenceRequired:1b}}"],
+        look=entity("minecraft:zombie_villager"),
+        frozen=["data merge entity @e[type=minecraft:zombie_villager,limit=1] {Health:18f,ConversionTime:2400,active_effects:[{id:\"minecraft:strength\",amplifier:0b,duration:2400}]}"],
+    ),
+    scene(
+        "villager_restock",
+        setup=[
+            f"summon minecraft:villager 3 {Y + 1} -3 {{NoAI:1b,Silent:1b,VillagerData:{{profession:\"minecraft:librarian\",level:3,type:\"minecraft:plains\"}},"
+            'Offers:{Recipes:[{buy:{id:"minecraft:emerald",count:1},sell:{id:"minecraft:bread",count:6},uses:1,maxUses:12}]}}'
+        ],
+        look=entity("minecraft:villager"),
+    ),
+    scene(
+        "pet_armor",
+        setup=[f"summon minecraft:wolf -1.5 {Y + 1} -2.5 {{NoAI:1b,Silent:1b,equipment:{{body:{{id:\"minecraft:wolf_armor\",count:1}}}}}}"],
+        look=entity("minecraft:wolf"),
+    ),
+    scene(
+        "player_head",
+        setup=[f'setblock -3 {Y + 1} 0 minecraft:player_head[rotation=4]{{profile:"Notch"}}'],
+        look=block(-3, Y + 1, 0),
+    ),
+    scene(
+        "command_block",
+        setup=[f'setblock -3 {Y + 1} 0 minecraft:command_block{{Command:"say hello from jade"}}'],
+        look=block(-3, Y + 1, 0),
+    ),
+    # ---- #34：距离与方块朝向（默认关，设置里打开） ----
+    scene(
+        "distance_and_face",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_NBT}"],
+        look=block(-3, Y + 1, 0),
+        settings={"show_distance": True, "show_block_face": True},
+    ),
+    # ---- #36：隐藏列表与自定义主题 ----
+    scene(
+        "hide_list",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_NBT}"],
+        look=block(-3, Y + 1, 0),
+        settings={"hide_list": "# test\nminecraft:chest\n"},
+        expect="hidden",
+    ),
+    scene(
+        "theme_custom",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_NBT}"],
+        look=block(-3, Y + 1, 0),
+        settings={"theme": 4, "custom_border": "#ff8800", "custom_title": "#55ff55", "custom_accent": "#ffaa00"},
+    ),
     # mod 安装组合（#19）：试过“只装客户端”“只装服务端”，Horizon 的 mod 握手都直接拒绝进服
     # （Your mods don't match this server's），side = "both" 的 mod 没法做这两种组合，所以没有对应场景。
 ]
@@ -632,8 +691,15 @@ def set_setting(gdir, key, value):
 def reset_settings(gdir, settings=None):
     """清掉上次留下的设置，再写入这次要用的（默认全部用默认值）。"""
     shutil.rmtree(setting_dir(gdir), ignore_errors=True)
+    # 隐藏列表不是设置，是 config/jade/hide.txt：每次先清掉，场景要用时再写。
+    hide_file = gdir / "config" / "jade" / "hide.txt"
+    hide_file.unlink(missing_ok=True)
     for key, value in (settings or {}).items():
-        set_setting(gdir, key, value)
+        if key == "hide_list":
+            hide_file.parent.mkdir(parents=True, exist_ok=True)
+            hide_file.write_text(value, encoding="utf-8")
+        else:
+            set_setting(gdir, key, value)
 
 
 def prepare_options(gdir, lang="en_us"):

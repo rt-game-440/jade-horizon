@@ -43,6 +43,7 @@ Client only:
 - Crop growth, repeater delay, comparator mode, lever state, redstone power, note block instrument and pitch, beehive honey level, unstable TNT
 - Harvest info: which tool the block needs and whether your held tool can collect its drops
 - Fluids: pointing at water, lava, etc. shows the name and a bucket icon (enabled by default, as in Jade)
+- Distance to the target and the block face you are aiming at (off by default; enable in settings)
 - Hold Shift for details: container contents are one line by default, and long-tail info such as breeding cooldown and growth time moves to the detailed view
 
 Additionally shown when the server has it installed:
@@ -52,6 +53,8 @@ Additionally shown when the server has it installed:
 - Furnace / blast furnace / smoker progress, brewing stand progress and fuel, campfire cooking progress
 - Beehive bee count, spawner mob and cooldown, jukebox disc, lectern book, item frame item
 - Baby mob growth time, breeding cooldown, love state, next egg time for chickens
+- Sign text and waxed state, the player name on a player head, a command block's command (only shown to players who may use command blocks)
+- Zombie villager conversion time, villager "ready to restock" (a trade has been used), wolf and horse armor
 
 The server only answers for targets within 16 blocks in the same dimension. Both network packets are registered as optional (`optional()`) and carry a protocol version;
 if the other side is missing or the version differs it is treated as not installed, and only client-known information is shown.
@@ -61,10 +64,16 @@ if the other side is missing or the version differs it is treated as not install
 In game: "Options > Mods > Jade":
 
 - Master switch, anchor (top centre / top left / top right / middle left / middle right), horizontal and vertical offset, background opacity
-- Theme: Classic (Vanilla-like), Dark, Light, High contrast (text/background contrast of at least 4.5:1)
+- Theme: Classic (Vanilla-like), Dark, Light, High contrast (text/background contrast of at least 4.5:1), or Custom: set background, border, title, text and mod-name colours on the settings page
 - Animation: fade when the target changes, smooth size transitions
-- Per-item toggles: health, armor, potions, horse stats, villagers, owner, container contents, furnace progress, crops, redstone, harvest tool and progress, fluids, drops, mod name
+- Per-item toggles: health, armor, potions, horse stats, villagers, owner, container contents, furnace progress, crops, redstone, harvest tool and progress, fluids, drops, mod name,
+  distance, block face, waxed, zombie villager conversion, villager restock, pet armor, player head, sign, command block
 - Debug stats: when on, network counters are written to `horizon-mod-data/jade/perf.json` every 10 seconds (used by `tools/perf.py`; off by default)
+
+### Hide list
+
+Put blocks or entities you do not want a tooltip for in `config/jade/hide.txt` in the game folder, one per line: `minecraft:barrier` is a full id, `create:*` a whole namespace, and `#` starts a comment.
+A commented template is created the first time you join a world if the file is missing; edits are picked up within a few seconds, no restart needed.
 
 Two key bindings are under "Controls": `Show Overlay` (default Numpad 1, runtime toggle, resets on restart) and `Toggle Fluid` (default Numpad 2).
 While the tooltip is hidden nothing is assembled and no requests are sent. Scaling is not implemented: Horizon's `DrawContext` has no scaling and item icons cannot be drawn with a transform.

@@ -47,7 +47,7 @@ pub fn collect(host: &mut dyn ServerHost, player: PlayerRef, target: &NetTarget)
             if let Some(be) = be {
                 let kind = be.kind(&*host).map(|k| k.id(&*host)).unwrap_or_default();
                 let nbt = be.data(&*host).unwrap_or_default();
-                block_entity(host, level, pos, &kind, &nbt, &mut data);
+                block_entity(host, player, level, pos, &kind, &nbt, &mut data);
             }
             // 能量与流体能力按坐标查：炼药锅这类没有方块实体的方块也有流体能力。
             tanks(host, level, pos, &mut data.tanks);
@@ -91,6 +91,7 @@ fn dist2(a: [f64; 3], b: [f64; 3]) -> f64 {
 
 fn block_entity(
     host: &mut dyn ServerHost,
+    player: PlayerRef,
     level: mod_api::LevelRef,
     pos: [i32; 3],
     kind: &str,
@@ -161,6 +162,25 @@ fn block_entity(
             }
             return;
         }
+        "minecraft:sign" | "minecraft:hanging_sign" => {
+            sign_lines(nbt, data);
+            return;
+        }
+        "minecraft:skull" => {
+            if let Some(name) = skull_owner(nbt) {
+                data.lines.push(line("jade.horizon.player_head", [lit(&name)]));
+            }
+            return;
+        }
+        "minecraft:command_block" => {
+            // 和原版一样，只给能用命令方块的玩家看命令内容。
+            if player.can_use_game_master_blocks(&*host).unwrap_or(false) {
+                if let Some(command) = cget(nbt, "Command").and_then(tag_str).filter(|c| !c.is_empty()) {
+                    data.lines.push(line("jade.horizon.command", [lit(&clip(&command, COMMAND_MAX_CHARS))]));
+                }
+            }
+            return;
+        }
         _ => {}
     }
     // 通用容器：先读物品能力，读不到再读 NBT 的 Items。
@@ -177,6 +197,97 @@ fn block_entity(
         items = slots.into_iter().map(|(_, item)| item).collect();
     }
     data.items = merge(items);
+}
+
+/// 命令方块的命令最多显示多少个字符，超出的用省略号。
+const COMMAND_MAX_CHARS: usize = 48;
+/// 告示牌每行最多显示多少个字符。
+const SIGN_LINE_MAX_CHARS: usize = 32;
+
+/// 截到 `max` 个字符，超出加省略号。
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let mut out: String = text.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+/// 文本组件的纯文本：字符串（可能是带引号的 JSON 文本）或带 `text` 的复合标签。
+fn component_text(tag: &Tag) -> String {
+    match tag {
+        Tag::String(s) => plain_text(&s.to_string_lossy()),
+        Tag::Compound(_) => tag.get("text").and_then(tag_str).unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+/// `"abc"`、`{"text":"abc"}`、`abc` 都取出 `abc`。
+fn plain_text(raw: &str) -> String {
+    let t = raw.trim();
+    if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') {
+        return t[1..t.len() - 1].replace("\\\"", "\"");
+    }
+    if t.starts_with('{') {
+        if let Some(start) = t.find("\"text\":\"") {
+            let rest = &t[start + 8..];
+            let mut out = String::new();
+            let mut chars = rest.chars();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\\' => out.extend(chars.next()),
+                    '"' => break,
+                    c => out.push(c),
+                }
+            }
+            return out;
+        }
+        return String::new();
+    }
+    t.to_owned()
+}
+
+/// 告示牌一面的四行文字。
+fn sign_side(nbt: &Compound, side: &str) -> Vec<String> {
+    match cpath(nbt, &[side, "messages"]) {
+        Some(Tag::List(list)) => list.iter().take(4).map(component_text).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// 告示牌：涂蜡状态与两面文字。两面都有字时加“前面/后面”标题。
+fn sign_lines(nbt: &Compound, data: &mut ServerData) {
+    if cget(nbt, "is_waxed").and_then(tag_int).is_some_and(|v| v != 0) {
+        data.lines.push(line("jade.horizon.waxed", []));
+    }
+    const KEYS: [&str; 4] = ["jade.access.sign.line1", "jade.access.sign.line2", "jade.access.sign.line3", "jade.access.sign.line4"];
+    let (front, back) = (sign_side(nbt, "front_text"), sign_side(nbt, "back_text"));
+    let has_text = |side: &[String]| side.iter().any(|t| !t.trim().is_empty());
+    let both = has_text(&front) && has_text(&back);
+    for (header, side) in [("jade.access.sign.front", &front), ("jade.access.sign.back", &back)] {
+        if !has_text(side) {
+            continue;
+        }
+        if both {
+            data.lines.push(line(header, []));
+        }
+        for (key, text) in KEYS.iter().zip(side.iter()) {
+            if !text.trim().is_empty() {
+                data.lines.push(line(key, [lit(&clip(text.trim(), SIGN_LINE_MAX_CHARS))]));
+            }
+        }
+    }
+}
+
+/// 玩家头颅的玩家名：`profile` 是名字字符串或带 `name` 的复合标签，旧存档是 `SkullOwner`。
+fn skull_owner(nbt: &Compound) -> Option<String> {
+    let name = match cget(nbt, "profile") {
+        Some(Tag::String(s)) => Some(s.to_string_lossy()),
+        Some(tag) => tag.get("name").and_then(tag_str),
+        None => cget(nbt, "SkullOwner").and_then(|t| tag_str(t).or_else(|| t.get("Name").and_then(tag_str))),
+    };
+    name.filter(|n| !n.is_empty())
 }
 
 /// 通过 `horizon:storage` 能力列出容器内容：原版容器与注册了该能力的模组容器都适用。
@@ -260,6 +371,23 @@ fn entity_data(kind: &str, nbt: &Compound, data: &mut ServerData) {
                 data.items.push(item);
             }
         }
+        "minecraft:zombie_villager" => {
+            if let Some(t) = cget(nbt, "ConversionTime").and_then(tag_int).filter(|t| *t > 0) {
+                data.lines.push(line("jade.zombieConversion.time", [ticks_text(t)]));
+            }
+        }
+        "minecraft:villager" => {
+            if has_used_trade(nbt) {
+                data.lines.push(line("jade.villagerRestock.ready", []));
+            }
+        }
+        "minecraft:wolf" | "minecraft:horse" => {
+            let armor = cget(nbt, "body_armor_item").or_else(|| cpath(nbt, &["equipment", "body"])).and_then(item_of);
+            if let Some(item) = armor {
+                let (ns, path) = split_id(&item.id);
+                data.lines.push(line("jade.horizon.pet_armor", [tr_arg(&[&format!("item.{ns}.{path}")])]));
+            }
+        }
         "minecraft:painting" => {
             if let Some(variant) = cget(nbt, "variant").and_then(tag_str) {
                 data.lines.push(line("jade.horizon.painting", [tr_arg(&[&painting_key(&variant)])]));
@@ -310,6 +438,14 @@ fn living_lines(host: &mut dyn ServerHost, entity: mod_api::EntityRef, living: m
             .map(|stack| NetItem { id: stack.item().id(&*host), count: clamp_count(stack.count()) })
             .collect();
         data.items.extend(merge(items));
+    }
+}
+
+/// 村民有没有用过的交易（`Offers.Recipes` 里有 `uses` 大于 0 的），用过的交易会在补货时刷新。
+fn has_used_trade(nbt: &Compound) -> bool {
+    match cpath(nbt, &["Offers", "Recipes"]) {
+        Some(Tag::List(recipes)) => recipes.iter().any(|r| r.get("uses").and_then(tag_int).is_some_and(|u| u > 0)),
+        _ => false,
     }
 }
 
@@ -583,5 +719,26 @@ mod living_tests {
     fn painting_and_uuid_keys() {
         assert_eq!(painting_key("minecraft:kebab"), "painting.minecraft.kebab.title");
         assert_eq!(short_uuid(0xdeadbeef_u128 << 96), "deadbeef");
+    }
+}
+
+#[cfg(test)]
+mod small_tips_tests {
+    use super::*;
+
+    #[test]
+    fn sign_text_forms_are_reduced_to_plain_text() {
+        assert_eq!(plain_text("\"Hello\""), "Hello");
+        assert_eq!(plain_text("{\"text\":\"Hi \\\"you\\\"\"}"), "Hi \"you\"");
+        assert_eq!(plain_text("raw"), "raw");
+        assert_eq!(plain_text("{\"translate\":\"x\"}"), "");
+        assert_eq!(plain_text(""), "");
+    }
+
+    #[test]
+    fn clip_adds_ellipsis_only_when_needed() {
+        assert_eq!(clip("abc", 3), "abc");
+        assert_eq!(clip("abcd", 3), "abc…");
+        assert_eq!(clip("你好世界", 2), "你好…");
     }
 }

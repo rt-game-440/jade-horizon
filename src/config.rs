@@ -30,6 +30,17 @@ pub enum Feature {
     Fluid,
     Dropped,
     ModName,
+    /// 与目标的距离（默认关）。
+    Distance,
+    /// 瞄准的方块面（默认关）。
+    BlockFace,
+    Waxed,
+    ZombieVillager,
+    Restock,
+    PetArmor,
+    PlayerHead,
+    Sign,
+    CommandBlock,
 }
 
 /// 注册的按键：id、默认键（与 Jade 一致，都在小键盘）、标签的翻译键。
@@ -38,25 +49,34 @@ pub const KEYS: [(&str, &str, &str); 2] = [
     (crate::client::KEY_TOGGLE_LIQUID, "key.keyboard.keypad.2", "key.jade.toggle_liquid"),
 ];
 
-/// 分项开关：功能、设置键、标签的翻译键。默认全开。
-const FEATURES: &[(Feature, &str, &str)] = &[
-    (Feature::Health, "show_health", "config.jade.plugin_minecraft.entity_health"),
-    (Feature::Armor, "show_armor", "config.jade.plugin_minecraft.entity_armor"),
-    (Feature::Potion, "show_potion", "config.jade.plugin_minecraft.potion_effects"),
-    (Feature::Horse, "show_horse", "config.jade.plugin_minecraft.horse_stats"),
-    (Feature::Villager, "show_villager", "config.jade.plugin_minecraft.profession"),
-    (Feature::Owner, "show_owner", "config.jade.plugin_minecraft.animal_owner"),
-    (Feature::Container, "show_container", "config.jade.plugin_minecraft.item_storage"),
-    (Feature::Energy, "show_energy", "config.jade.plugin_minecraft.energy_storage"),
-    (Feature::FluidTank, "show_fluid_tank", "config.jade.plugin_minecraft.fluid_storage"),
-    (Feature::Furnace, "show_furnace", "config.jade.plugin_minecraft.furnace"),
-    (Feature::Crop, "show_crop", "config.jade.plugin_minecraft.crop_progress"),
-    (Feature::Redstone, "show_redstone", "config.jade.plugin_minecraft.redstone"),
-    (Feature::Harvest, "show_harvest", "config.jade.plugin_minecraft.harvest_tool"),
-    (Feature::Mining, "show_mining", "config.jade.plugin_minecraft.breaking_progress"),
-    (Feature::Fluid, "show_fluid", "config.jade.display_fluids"),
-    (Feature::Dropped, "show_dropped", "config.jade.horizon.dropped_items"),
-    (Feature::ModName, "show_mod_name", "config.jade.plugin_jade.mod_name"),
+/// 分项开关：功能、设置键、标签的翻译键、默认值。
+const FEATURES: &[(Feature, &str, &str, bool)] = &[
+    (Feature::Health, "show_health", "config.jade.plugin_minecraft.entity_health", true),
+    (Feature::Armor, "show_armor", "config.jade.plugin_minecraft.entity_armor", true),
+    (Feature::Potion, "show_potion", "config.jade.plugin_minecraft.potion_effects", true),
+    (Feature::Horse, "show_horse", "config.jade.plugin_minecraft.horse_stats", true),
+    (Feature::Villager, "show_villager", "config.jade.plugin_minecraft.profession", true),
+    (Feature::Owner, "show_owner", "config.jade.plugin_minecraft.animal_owner", true),
+    (Feature::Container, "show_container", "config.jade.plugin_minecraft.item_storage", true),
+    (Feature::Energy, "show_energy", "config.jade.plugin_minecraft.energy_storage", true),
+    (Feature::FluidTank, "show_fluid_tank", "config.jade.plugin_minecraft.fluid_storage", true),
+    (Feature::Furnace, "show_furnace", "config.jade.plugin_minecraft.furnace", true),
+    (Feature::Crop, "show_crop", "config.jade.plugin_minecraft.crop_progress", true),
+    (Feature::Redstone, "show_redstone", "config.jade.plugin_minecraft.redstone", true),
+    (Feature::Harvest, "show_harvest", "config.jade.plugin_minecraft.harvest_tool", true),
+    (Feature::Mining, "show_mining", "config.jade.plugin_minecraft.breaking_progress", true),
+    (Feature::Fluid, "show_fluid", "config.jade.display_fluids", true),
+    (Feature::Dropped, "show_dropped", "config.jade.horizon.dropped_items", true),
+    (Feature::ModName, "show_mod_name", "config.jade.plugin_jade.mod_name", true),
+    (Feature::Distance, "show_distance", "config.jade.plugin_jade.distance", false),
+    (Feature::BlockFace, "show_block_face", "config.jade.plugin_jade.block_face", false),
+    (Feature::Waxed, "show_waxed", "config.jade.plugin_minecraft.waxed", true),
+    (Feature::ZombieVillager, "show_zombie_villager", "config.jade.plugin_minecraft.zombie_villager", true),
+    (Feature::Restock, "show_restock", "config.jade.plugin_minecraft.villager_restock", true),
+    (Feature::PetArmor, "show_pet_armor", "config.jade.plugin_minecraft.pet_armor", true),
+    (Feature::PlayerHead, "show_player_head", "config.jade.plugin_minecraft.player_head", true),
+    (Feature::Sign, "show_sign", "config.jade.plugin_jade_access.sign", true),
+    (Feature::CommandBlock, "show_command_block", "config.jade.plugin_minecraft.command_block", true),
 ];
 
 /// 提示框锚在屏幕的哪里。
@@ -84,13 +104,41 @@ pub enum ThemeId {
     Dark,
     Light,
     HighContrast,
+    /// 用设置里的五个颜色。
+    Custom,
 }
 
-const THEMES: [(ThemeId, &str); 4] = [
+const THEMES: [(ThemeId, &str); 5] = [
     (ThemeId::Classic, "jade.theme.jade.waila"),
     (ThemeId::Dark, "jade.theme.jade.dark"),
     (ThemeId::Light, "config.jade.horizon.theme.light"),
     (ThemeId::HighContrast, "config.jade.horizon.theme.high_contrast"),
+    (ThemeId::Custom, "config.jade.horizon.theme.custom"),
+];
+
+/// 自定义主题的五个颜色（`0xRRGGBB`）：背景、边框、标题、正文、模组名。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CustomColors {
+    pub bg: u32,
+    pub border: u32,
+    pub title: u32,
+    pub text: u32,
+    pub accent: u32,
+}
+
+impl Default for CustomColors {
+    fn default() -> Self {
+        CustomColors { bg: 0x10_1020, border: 0x55_88FF, title: 0xFF_FFFF, text: 0xCC_CCCC, accent: 0x8F_A8FF }
+    }
+}
+
+/// 自定义颜色的设置：键名、标签的翻译键。
+const CUSTOM_COLOR_KEYS: [(&str, &str); 5] = [
+    ("custom_bg", "config.jade.horizon.custom_bg"),
+    ("custom_border", "config.jade.horizon.custom_border"),
+    ("custom_title", "config.jade.horizon.custom_title"),
+    ("custom_text", "config.jade.horizon.custom_text"),
+    ("custom_accent", "config.jade.horizon.custom_accent"),
 ];
 
 /// 一份读好的设置。
@@ -106,6 +154,7 @@ pub struct Config {
     pub animation: bool,
     /// 调试统计：把网络计数写进 `perf.json`（给 `tools/perf.py` 用）。
     pub debug_stats: bool,
+    pub custom: CustomColors,
     features: u32,
 }
 
@@ -150,8 +199,12 @@ pub fn specs() -> Vec<SettingSpec> {
         SettingSpec::choice("theme", "config.jade.overlay_theme", THEMES.iter().map(|(_, key)| *key), 0),
         SettingSpec::toggle("animation", "config.jade.animation", true).tooltip("config.jade.animation_desc"),
     ];
+    let d = CustomColors::default();
+    for ((key, label), default) in CUSTOM_COLOR_KEYS.iter().zip([d.bg, d.border, d.title, d.text, d.accent]) {
+        out.push(SettingSpec::color(*key, *label, default));
+    }
     out.push(SettingSpec::toggle("debug_stats", "config.jade.debug_mode", false));
-    out.extend(FEATURES.iter().map(|(_, key, label)| SettingSpec::toggle(*key, *label, true)));
+    out.extend(FEATURES.iter().map(|(_, key, label, default)| SettingSpec::toggle(*key, *label, *default)));
     out
 }
 
@@ -184,11 +237,16 @@ pub fn load(read: &impl Fn(&str) -> Option<SettingValue>) -> Config {
         _ => 0,
     };
     let mut features = 0;
-    for (i, (_, key, _)) in FEATURES.iter().enumerate() {
-        if toggle(key, true) {
+    for (i, (_, key, _, default)) in FEATURES.iter().enumerate() {
+        if toggle(key, *default) {
             features |= 1 << i;
         }
     }
+    let color = |key: &str, default: u32| match read(key) {
+        Some(SettingValue::Color(v)) => v & 0x00FF_FFFF,
+        _ => default,
+    };
+    let d = CustomColors::default();
     Config {
         enabled: toggle("enabled", true),
         anchor: ANCHORS[choice("anchor", ANCHORS.len())].0,
@@ -198,6 +256,13 @@ pub fn load(read: &impl Fn(&str) -> Option<SettingValue>) -> Config {
         theme: THEMES[choice("theme", THEMES.len())].0,
         animation: toggle("animation", true),
         debug_stats: toggle("debug_stats", false),
+        custom: CustomColors {
+            bg: color("custom_bg", d.bg),
+            border: color("custom_border", d.border),
+            title: color("custom_title", d.title),
+            text: color("custom_text", d.text),
+            accent: color("custom_accent", d.accent),
+        },
         features,
     }
 }
@@ -265,9 +330,25 @@ mod tests {
         assert_eq!((c.anchor, c.theme, c.offset_x, c.offset_y), (Anchor::TopCenter, ThemeId::Classic, 0, 0));
         // 默认不透明度要换算成原来的 0xF0。
         assert_eq!((c.alpha * 255.0).round() as u32, 0xF0);
-        for (feature, ..) in FEATURES {
-            assert!(c.has(*feature));
+        // 距离与朝向默认关，其余分项默认开。
+        for (feature, .., default) in FEATURES {
+            assert_eq!(c.has(*feature), *default);
         }
+        assert!(!c.has(Feature::Distance) && !c.has(Feature::BlockFace));
+        assert_eq!(c.custom, CustomColors::default());
+    }
+
+    #[test]
+    fn custom_colors_are_read_without_alpha() {
+        let read = |key: &str| match key {
+            "theme" => Some(SettingValue::Choice(4)),
+            "custom_bg" => Some(SettingValue::Color(0xFF12_3456)),
+            _ => None,
+        };
+        let c = load(&read);
+        assert_eq!(c.theme, ThemeId::Custom);
+        assert_eq!(c.custom.bg, 0x12_3456);
+        assert_eq!(c.custom.border, CustomColors::default().border);
     }
 
     #[test]
@@ -298,8 +379,8 @@ mod tests {
     fn feature_bits_do_not_collide() {
         let mut c = Config::default();
         c.set(Feature::Crop, false);
-        for (feature, ..) in FEATURES {
-            assert_eq!(c.has(*feature), *feature != Feature::Crop);
+        for (feature, .., default) in FEATURES {
+            assert_eq!(c.has(*feature), *feature != Feature::Crop && *default);
         }
         c.set(Feature::Crop, true);
         assert_eq!(c, Config::default());

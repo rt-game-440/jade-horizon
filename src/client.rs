@@ -184,8 +184,12 @@ pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
     // 掉落物原版瞄不到，自己做射线；它比准星命中的东西近时，当作准星命中的实体。
     let dropped = if cfg.has(Feature::Dropped) { crate::dropped::target(host) } else { None };
     let fluid = if dropped.is_some() || !cfg.has(Feature::Fluid) || liquid_off { None } else { fluid_target(host) };
+    // 隐藏列表里的方块、实体、流体当作没瞄准任何东西：不组装提示框，也不向服务端请求。
+    let hide = crate::hide::current(host);
+    let fluid = fluid.filter(|f| !hide.hides(&f.id));
     // 显示流体时不向服务端要数据（流体信息全在客户端算）。
     let target = if fluid.is_some() { None } else { dropped.or_else(|| host.crosshair_target()) };
+    let target = target.filter(|t| hide.is_empty() || !target_id(host, t).is_some_and(|id| hide.hides(&id)));
     let net = target.as_ref().and_then(net_target);
     // 先在锁内更新目标、取出服务端数据，放锁后再读宿主组装提示框。
     let (server, request, mining, tick) = {
@@ -218,6 +222,15 @@ pub fn tick(host: &mut dyn ClientHost) -> Option<Request> {
     }
     lock(state()).tooltip = tooltip;
     request
+}
+
+/// 目标的方块或实体 id。
+fn target_id(host: &dyn ClientHost, target: &CrosshairTarget) -> Option<String> {
+    match target {
+        CrosshairTarget::Block { state, .. } => Some(state.block().id(host)),
+        CrosshairTarget::Entity { entity, .. } => entity.kind(host).map(|k| k.id(host)),
+        _ => None,
+    }
 }
 
 /// 准星命中的方块坐标；对准实体或什么也没有时为 None。
@@ -319,7 +332,7 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
     let mut rows: Vec<Entry> = Vec::new();
     let namespace;
     match target {
-        CrosshairTarget::Block { state, .. } => {
+        CrosshairTarget::Block { state, hit, .. } => {
             let block = state.block();
             let id = block.id(host);
             if id == "minecraft:air" {
@@ -333,8 +346,15 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
                 rows.push(entry(Row::Harvest { tool: harvest.tool, ok: harvest.ok }, Feature::Harvest));
             }
             block_rows(host, &id, &props, &mut rows);
+            if let Some(name) = face_name(hit.face) {
+                let face = translated(host, name);
+                rows.push(entry(Row::Line(tr(host, "jade.horizon.block_face", &[face]), Tone::Normal), Feature::BlockFace));
+            }
+            if let Some(d) = hit_distance(host, hit.point) {
+                rows.push(entry(Row::Line(tr(host, "jade.distance2", &[d]), Tone::Normal), Feature::Distance));
+            }
         }
-        CrosshairTarget::Entity { entity, .. } => {
+        CrosshairTarget::Entity { entity, point } => {
             let kind = entity.kind(host).map(|k| k.id(host)).unwrap_or_default();
             namespace = kind.split(':').next().unwrap_or("minecraft").to_owned();
             tip.title = entity.name(host).unwrap_or_else(|| translated(host, &key_of("entity", &kind)));
@@ -342,6 +362,9 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
                 if let (Some(hp), Some(max)) = (living.health(host), living.max_health(host)) {
                     rows.push(entry(Row::Health(hp, max), Feature::Health));
                 }
+            }
+            if let Some(d) = hit_distance(host, *point) {
+                rows.push(entry(Row::Line(tr(host, "jade.distance2", &[d]), Tone::Normal), Feature::Distance));
             }
         }
         _ => return None,
@@ -359,6 +382,25 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
     tip.rows = visible;
     tip.mod_name = mod_name(host, &namespace);
     Some(tip)
+}
+
+/// 方块面的法线 → 翻译键。
+fn face_name(face: [i32; 3]) -> Option<&'static str> {
+    Some(match face {
+        [0, 1, 0] => "jade.horizon.face.up",
+        [0, -1, 0] => "jade.horizon.face.down",
+        [0, 0, -1] => "jade.horizon.face.north",
+        [0, 0, 1] => "jade.horizon.face.south",
+        [-1, 0, 0] => "jade.horizon.face.west",
+        [1, 0, 0] => "jade.horizon.face.east",
+        _ => return None,
+    })
+}
+
+/// 眼睛到命中点的距离，保留一位小数。
+fn hit_distance(host: &dyn ClientHost, point: [f64; 3]) -> Option<String> {
+    let eye = crate::ray::eye(host)?;
+    Some(format!("{:.1}", crate::ray::distance(eye, point)))
 }
 
 /// 按分项开关与精简/详细模式过滤行，返回 `(显示的行, 精简模式隐藏了内容, 详细模式也放不下)`。
@@ -555,6 +597,13 @@ fn line_feature(key: &str) -> Feature {
         "jade.owner" => Feature::Owner,
         "tooltip.jade.villager_profession" => Feature::Villager,
         k if k.starts_with("jade.horseStat.") => Feature::Horse,
+        "jade.horizon.waxed" => Feature::Waxed,
+        "jade.zombieConversion.time" => Feature::ZombieVillager,
+        "jade.villagerRestock.ready" => Feature::Restock,
+        "jade.horizon.pet_armor" => Feature::PetArmor,
+        "jade.horizon.player_head" => Feature::PlayerHead,
+        "jade.horizon.command" => Feature::CommandBlock,
+        k if k.starts_with("jade.access.sign.") => Feature::Sign,
         _ => Feature::Always,
     }
 }
@@ -851,5 +900,15 @@ mod tests {
         assert_eq!(line_feature("tooltip.jade.villager_profession"), Feature::Villager);
         assert_eq!(line_feature("jade.owner"), Feature::Owner);
         assert_eq!(line_feature("jade.nextEgg"), Feature::Always);
+        assert_eq!(line_feature("jade.horizon.waxed"), Feature::Waxed);
+        assert_eq!(line_feature("jade.access.sign.line2"), Feature::Sign);
+        assert_eq!(line_feature("jade.zombieConversion.time"), Feature::ZombieVillager);
+    }
+
+    #[test]
+    fn faces_map_to_translation_keys() {
+        assert_eq!(face_name([0, 1, 0]), Some("jade.horizon.face.up"));
+        assert_eq!(face_name([-1, 0, 0]), Some("jade.horizon.face.west"));
+        assert_eq!(face_name([0, 0, 0]), None);
     }
 }

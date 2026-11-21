@@ -15,6 +15,7 @@ mod config;
 mod dropped;
 mod fluid;
 mod harvest;
+mod hide;
 #[cfg(test)]
 mod lang_keys_test;
 mod limit;

@@ -5,7 +5,7 @@ use std::sync::{Mutex, OnceLock};
 use mod_api::DrawContext;
 
 use crate::client::{Row, TankKind, Tone, Tooltip};
-use crate::config::{Anchor, Config, ThemeId};
+use crate::config::{Anchor, Config, CustomColors, ThemeId};
 
 const PAD: f32 = 4.0;
 const LINE: f32 = 10.0;
@@ -31,6 +31,34 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// 当前设置对应的配色：自定义主题用设置里的五个颜色。
+    pub fn from_config(cfg: &Config) -> Theme {
+        match cfg.theme {
+            ThemeId::Custom => Theme::custom(cfg.custom),
+            id => Theme::of(id),
+        }
+    }
+
+    /// 自定义主题：背景、边框、标题、正文、模组名由玩家定，警告、完成、空槽沿用深色主题的值。
+    pub fn custom(c: CustomColors) -> Theme {
+        let dark = Theme::of(ThemeId::Dark);
+        let opaque = |rgb: u32| 0xFF00_0000 | (rgb & 0x00FF_FFFF);
+        // 边框下沿比上沿暗一档，和内置主题的渐变一致。
+        let darker = |rgb: u32| {
+            let ch = |shift: u32| ((rgb >> shift & 0xFF) * 3 / 5) << shift;
+            0xFF00_0000 | ch(16) | ch(8) | ch(0)
+        };
+        Theme {
+            bg: 0xF000_0000 | (c.bg & 0x00FF_FFFF),
+            border_top: opaque(c.border),
+            border_bottom: darker(c.border),
+            title: opaque(c.title),
+            mod_name: opaque(c.accent),
+            text: opaque(c.text),
+            ..dark
+        }
+    }
+
     pub fn of(id: ThemeId) -> Theme {
         match id {
             // 原版 tooltip 风：深紫底、紫色渐变边框。
@@ -82,6 +110,8 @@ impl Theme {
                 dim: 0xFF80_8080,
                 shadow: false,
             },
+            // 没有设置时的自定义主题；真正的颜色走 `Theme::custom`。
+            ThemeId::Custom => Theme::custom(CustomColors::default()),
         }
     }
 
@@ -300,7 +330,7 @@ pub fn draw(draw: &mut dyn DrawContext, tip: Option<&Tooltip>, cfg: &Config, now
         return;
     };
     drop(anim);
-    let style = Style { theme: Theme::of(cfg.theme), fade: frame.alpha };
+    let style = Style { theme: Theme::from_config(cfg), fade: frame.alpha };
     let [x, y] = place(cfg.anchor, draw.size(), [frame.w, frame.h], [cfg.offset_x, cfg.offset_y]);
     draw_box(draw, &shown, &lay, &style, cfg.alpha, [x, y, frame.w, frame.h], frame.morphing);
 }
@@ -582,6 +612,17 @@ mod tests {
             let ratio = contrast(color & 0xFF_FFFF, bg);
             assert!(ratio >= 4.5, "{name} 对比度只有 {ratio:.2}");
         }
+    }
+
+    #[test]
+    fn custom_theme_uses_given_colors_and_keeps_text_readable_fields() {
+        let c = CustomColors { bg: 0x112233, border: 0xFFFFFF, title: 0xAABBCC, text: 0x010203, accent: 0x445566 };
+        let t = Theme::custom(c);
+        assert_eq!(t.bg & 0x00FF_FFFF, 0x112233);
+        assert_eq!(t.border_top, 0xFFFF_FFFF);
+        assert_eq!(t.border_bottom, 0xFF99_9999);
+        assert_eq!((t.title, t.text, t.mod_name), (0xFFAA_BBCC, 0xFF01_0203, 0xFF44_5566));
+        assert_eq!(t.warn, Theme::of(ThemeId::Dark).warn);
     }
 
     #[test]
