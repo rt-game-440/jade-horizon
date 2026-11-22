@@ -44,6 +44,25 @@ pub enum Feature {
     Hopper,
     Enchant,
     Display,
+    /// 手持物品（详细信息）。
+    HeldItem,
+    /// 实体变种（详细信息）。
+    Variant,
+    /// 方块数量：蜡烛、海龟蛋等（详细信息）。
+    BlockAmount,
+    /// 调试：方块 / 实体注册名（默认关）。
+    RegistryName,
+    /// 调试：方块状态属性（默认关）。
+    BlockStates,
+    /// 调试：战利品表（默认关，需要 OP 权限）。
+    LootTable,
+}
+
+impl Feature {
+    /// 放在设置页“调试”分组里的分项。
+    fn is_debug(self) -> bool {
+        matches!(self, Feature::RegistryName | Feature::BlockStates | Feature::LootTable)
+    }
 }
 
 /// 注册的按键：id、默认键（与 Jade 一致，都在小键盘）、标签的翻译键。
@@ -83,6 +102,12 @@ const FEATURES: &[(Feature, &str, &str, bool)] = &[
     (Feature::Hopper, "show_hopper", "config.jade.horizon.hopper", true),
     (Feature::Enchant, "show_enchant", "config.jade.plugin_minecraft.enchantment_power", true),
     (Feature::Display, "show_display", "config.jade.horizon.display", true),
+    (Feature::HeldItem, "show_held_item", "config.jade.plugin_jade_access.held_item", true),
+    (Feature::Variant, "show_variant", "config.jade.plugin_jade_access.entity_variant", true),
+    (Feature::BlockAmount, "show_block_amount", "config.jade.plugin_jade_access.block", true),
+    (Feature::RegistryName, "show_registry_name", "config.jade.plugin_jade.registry_name", false),
+    (Feature::BlockStates, "show_block_states", "config.jade.plugin_jade.block_states", false),
+    (Feature::LootTable, "show_loot_table", "config.jade.plugin_jade.loot_table", false),
 ];
 
 /// 提示框锚在屏幕的哪里。
@@ -161,7 +186,7 @@ pub struct Config {
     /// 调试统计：把网络计数写进 `perf.json`（给 `tools/perf.py` 用）。
     pub debug_stats: bool,
     pub custom: CustomColors,
-    features: u32,
+    features: u64,
 }
 
 impl Config {
@@ -184,7 +209,7 @@ impl Config {
     }
 }
 
-fn feature_bit(feature: Feature) -> Option<u32> {
+fn feature_bit(feature: Feature) -> Option<u64> {
     FEATURES.iter().position(|(f, ..)| *f == feature).map(|i| 1 << i)
 }
 
@@ -209,8 +234,16 @@ pub fn specs() -> Vec<SettingSpec> {
     for ((key, label), default) in CUSTOM_COLOR_KEYS.iter().zip([d.bg, d.border, d.title, d.text, d.accent]) {
         out.push(SettingSpec::color(*key, *label, default));
     }
+    let toggles = |debug: bool| {
+        FEATURES
+            .iter()
+            .filter(move |(feature, ..)| feature.is_debug() == debug)
+            .map(|(_, key, label, default)| SettingSpec::toggle(*key, *label, *default))
+    };
+    out.extend(toggles(false));
+    // 调试分组放在最后：统计开关与各调试分项。
     out.push(SettingSpec::toggle("debug_stats", "config.jade.debug_mode", false));
-    out.extend(FEATURES.iter().map(|(_, key, label, default)| SettingSpec::toggle(*key, *label, *default)));
+    out.extend(toggles(true));
     out
 }
 

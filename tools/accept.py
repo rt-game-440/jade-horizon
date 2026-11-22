@@ -545,6 +545,47 @@ SCENES = [
         setup=[f'summon minecraft:falling_block -2.5 {Y + 1} 0.5 {{BlockState:{{Name:"minecraft:sand"}},NoGravity:1b,Time:1}}'],
         look=point(-3, Y + 1, 0),
     ),
+    # ---- #35：调试信息（默认关，设置里打开） ----
+    scene(
+        "registry_name",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{CHEST_NBT}"],
+        look=block(-3, Y + 1, 0),
+        settings={"show_registry_name": True},
+    ),
+    scene(
+        "block_states",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:oak_stairs[facing=east,half=top,shape=straight,waterlogged=false]"],
+        look=block(-3, Y + 1, 0),
+        settings={"show_block_states": True},
+    ),
+    scene(
+        "loot_table",
+        setup=[f'setblock -3 {Y + 1} 0 minecraft:chest[facing=east]{{LootTable:"minecraft:chests/simple_dungeon",LootTableSeed:12345L}}'],
+        look=block(-3, Y + 1, 0),
+        settings={"show_loot_table": True},
+    ),
+    # ---- #33：详细信息扩展（按住 Shift 才显示） ----
+    scene(
+        "held_item",
+        setup=[
+            f"summon minecraft:husk 2.5 {Y + 1} -2.5 {{NoAI:1b,Silent:1b,PersistenceRequired:1b,"
+            'equipment:{mainhand:{id:"minecraft:iron_sword",count:1},offhand:{id:"minecraft:shield",count:1}}}'
+        ],
+        look=entity("minecraft:husk"),
+        actions=["key shift down"],
+    ),
+    scene(
+        "entity_variant",
+        setup=[f'summon minecraft:cat -1.5 {Y + 1} -2.5 {{NoAI:1b,Silent:1b,variant:"minecraft:calico"}}'],
+        look=entity("minecraft:cat"),
+        actions=["key shift down"],
+    ),
+    scene(
+        "block_amount",
+        setup=[f"setblock -3 {Y + 1} 0 minecraft:candle[candles=3]"],
+        look=block(-3, Y + 1, 0),
+        actions=["key shift down"],
+    ),
     # mod 安装组合（#19）：试过“只装客户端”“只装服务端”，Horizon 的 mod 握手都直接拒绝进服
     # （Your mods don't match this server's），side = "both" 的 mod 没法做这两种组合，所以没有对应场景。
 ]

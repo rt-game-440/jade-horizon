@@ -8,7 +8,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use mod_api::{BlockState, ClientHost, CrosshairTarget, Identifier, ItemKey};
 
 use crate::config::{Config, Feature};
-use crate::net::{KIND_BLOCK, KIND_ENTITY, NetLine, NetTarget, Request, ServerData};
+use crate::net::{ARG_ID, ARG_NUMBER, ARG_PARTS, ARG_TICKS, KIND_BLOCK, KIND_ENTITY, NetArg, NetLine, NetTarget, Request, ServerData};
 
 /// 文字的语气：具体颜色由主题决定。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -318,6 +318,10 @@ fn ticks_text(host: &dyn ClientHost, ticks: u32) -> String {
 
 /// 精简模式下隐藏的服务端行键；按住 Shift 才显示。
 const DETAIL_KEYS: &[&str] = &[
+    "jade.access.held_item.main",
+    "jade.access.held_item.off",
+    "jade.access.entity.variant",
+    "jade.access.block.amount",
     "jade.mobgrowth.time",
     "jade.mobbreeding.time",
     "jade.mobbreeding.fed",
@@ -347,6 +351,11 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
                 rows.push(entry(Row::Harvest { tool: harvest.tool, ok: harvest.ok }, Feature::Harvest));
             }
             block_rows(host, &id, &props, &mut rows);
+            block_amount_row(host, &props, &mut rows);
+            if let Some(row) = registry_row(&id) {
+                rows.insert(0, entry(row, Feature::RegistryName));
+            }
+            rows.extend(state_rows(&props).into_iter().map(|row| entry(row, Feature::BlockStates)));
             if id == "minecraft:enchanting_table" {
                 if let Some(power) = enchant_power(host, block_pos(pos)) {
                     rows.push(entry(Row::Line(tr(host, "jade.ench_power", &[power.to_string()]), Tone::Normal), Feature::Enchant));
@@ -364,6 +373,9 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
             let kind = entity.kind(host).map(|k| k.id(host)).unwrap_or_default();
             namespace = kind.split(':').next().unwrap_or("minecraft").to_owned();
             tip.title = entity.name(host).unwrap_or_else(|| translated(host, &key_of("entity", &kind)));
+            if let Some(row) = registry_row(&kind) {
+                rows.push(entry(row, Feature::RegistryName));
+            }
             if let Some(living) = host.living(*entity) {
                 if let (Some(hp), Some(max)) = (living.health(host), living.max_health(host)) {
                     rows.push(entry(Row::Health(hp, max), Feature::Health));
@@ -388,6 +400,36 @@ fn build(host: &dyn ClientHost, target: &CrosshairTarget, server: Option<&Server
     tip.rows = visible;
     tip.mod_name = mod_name(host, &namespace);
     Some(tip)
+}
+
+/// 注册名一行（调试信息）；空 id 不显示。
+fn registry_row(id: &str) -> Option<Row> {
+    (!id.is_empty()).then(|| Row::Line(id.to_owned(), Tone::Normal))
+}
+
+/// 方块状态最多显示多少个属性。
+const MAX_STATE_ROWS: usize = 12;
+
+/// 方块状态属性，按属性名排序逐行 `键: 值`（调试信息）。
+fn state_rows(props: &HashMap<String, String>) -> Vec<Row> {
+    let mut pairs: Vec<_> = props.iter().collect();
+    pairs.sort();
+    pairs.into_iter().take(MAX_STATE_ROWS).map(|(k, v)| Row::Line(format!("{k}: {v}"), Tone::Normal)).collect()
+}
+
+/// 表示“个数”的方块状态属性：蜡烛、海龟蛋、酸黄瓜、花簇等。
+const AMOUNT_PROPS: &[&str] = &["candles", "pickles", "eggs", "flower_amount", "segment_amount"];
+
+/// 同一格里叠了几个：多于 1 个才显示（详细信息）。
+fn block_amount(props: &HashMap<String, String>) -> Option<u32> {
+    AMOUNT_PROPS.iter().find_map(|k| props.get(*k)?.parse::<u32>().ok()).filter(|n| *n > 1)
+}
+
+fn block_amount_row(host: &dyn ClientHost, props: &HashMap<String, String>, rows: &mut Vec<Entry>) {
+    if let Some(n) = block_amount(props) {
+        let text = translated(host, "jade.access.block.amount").replace("{0}", &n.to_string());
+        rows.push(Entry { row: Row::Line(text, Tone::Normal), detail: Some("jade.access.block.amount"), feature: Feature::BlockAmount });
+    }
 }
 
 /// 方块面的法线 → 翻译键。
@@ -642,6 +684,10 @@ fn line_feature(key: &str) -> Feature {
         "jade.horizon.player_head" => Feature::PlayerHead,
         "jade.horizon.command" => Feature::CommandBlock,
         k if k.starts_with("jade.access.sign.") => Feature::Sign,
+        k if k.starts_with("jade.access.held_item.") => Feature::HeldItem,
+        "jade.access.entity.variant" => Feature::Variant,
+        "jade.access.block.amount" => Feature::BlockAmount,
+        "jade.lootTable" | "jade.lootTableSeed" => Feature::LootTable,
         _ => Feature::Always,
     }
 }
@@ -655,23 +701,25 @@ fn net_line(host: &dyn ClientHost, line: &NetLine) -> String {
     tr(host, &line.key, &args)
 }
 
-/// 服务端行参数：`#lit:` 原样文本；`#ticks:N` 时间；`#tr:` 后是以 U+001F 分隔的片段，
-/// `@键` 片段翻译、其余原样，用空格连接；没有标签的一律原样显示（不会被当翻译键）。
-fn arg(host: &dyn ClientHost, a: &str) -> String {
-    if let Some(text) = a.strip_prefix("#lit:") {
-        text.to_owned()
-    } else if let Some(id) = a.strip_prefix("#id:") {
-        block_name(host, id)
-    } else if let Some(t) = a.strip_prefix("#ticks:") {
-        duration(host, t.parse().unwrap_or(0))
-    } else if let Some(parts) = a.strip_prefix("#tr:") {
-        parts
-            .split('\u{1f}')
-            .map(|part| part.strip_prefix('@').map_or_else(|| part.to_owned(), |key| translated(host, key)))
+/// 服务端行参数：按 `kind` 渲染。文本参数一律原样，不会被当成翻译键或再解析。
+fn arg(host: &dyn ClientHost, a: &NetArg) -> String {
+    arg_with(a, &|id| block_name(host, id), &|ticks| duration(host, ticks), &|key| translated(host, key))
+}
+
+/// [`arg`] 的纯函数部分：名称查找、时间格式化、翻译由调用方注入，便于不开游戏就测试。
+fn arg_with(a: &NetArg, name: &dyn Fn(&str) -> String, time: &dyn Fn(i32) -> String, translate: &dyn Fn(&str) -> String) -> String {
+    match a.kind {
+        ARG_ID => name(&a.text),
+        ARG_TICKS => time(a.number),
+        ARG_NUMBER => a.number.to_string(),
+        ARG_PARTS => a
+            .parts
+            .iter()
+            .map(|p| if p.translate { translate(&p.text) } else { p.text.clone() })
             .collect::<Vec<_>>()
-            .join(" ")
-    } else {
-        a.to_owned()
+            .join(" "),
+        // ARG_LIT 与未知种类：原样显示。
+        _ => a.text.clone(),
     }
 }
 
@@ -943,6 +991,42 @@ mod tests {
         assert_eq!(line_feature("jade.horizon.waxed"), Feature::Waxed);
         assert_eq!(line_feature("jade.access.sign.line2"), Feature::Sign);
         assert_eq!(line_feature("jade.zombieConversion.time"), Feature::ZombieVillager);
+    }
+
+    #[test]
+    fn args_render_by_kind_and_literals_stay_literal() {
+        use crate::net::NetPart;
+        let name = |id: &str| format!("<{id}>");
+        let time = |t: i32| format!("{t}t");
+        let tr = |k: &str| format!("T({k})");
+        let render = |a: &NetArg| arg_with(a, &name, &time, &tr);
+        // 以 `@`、`#lit:` 等开头的玩家名按原样显示。
+        for text in ["@a", "#lit:x", "#ticks:5", "@effect.minecraft.speed", "#tr:@x"] {
+            assert_eq!(render(&NetArg::lit(text)), text);
+        }
+        assert_eq!(render(&NetArg::id("minecraft:stone")), "<minecraft:stone>");
+        assert_eq!(render(&NetArg::ticks(40)), "40t");
+        assert_eq!(render(&NetArg::number(7)), "7");
+        let parts = NetArg::parts(vec![NetPart::key("effect.x"), NetPart::text("@raw"), NetPart::key("lvl")]);
+        assert_eq!(render(&parts), "T(effect.x) @raw T(lvl)");
+    }
+
+    #[test]
+    fn debug_rows_and_amounts() {
+        let props: HashMap<String, String> = [("facing", "north"), ("age", "3"), ("candles", "3")].map(|(k, v)| (k.to_owned(), v.to_owned())).into();
+        assert_eq!(
+            state_rows(&props),
+            vec![Row::Line("age: 3".into(), Tone::Normal), Row::Line("candles: 3".into(), Tone::Normal), Row::Line("facing: north".into(), Tone::Normal)]
+        );
+        let many: HashMap<String, String> = (0..20).map(|i| (format!("p{i:02}"), "x".to_owned())).collect();
+        assert_eq!(state_rows(&many).len(), MAX_STATE_ROWS);
+        assert_eq!(block_amount(&props), Some(3));
+        let one: HashMap<String, String> = [("eggs".to_owned(), "1".to_owned())].into();
+        assert_eq!(block_amount(&one), None);
+        assert_eq!(registry_row(""), None);
+        assert_eq!(registry_row("minecraft:stone"), Some(Row::Line("minecraft:stone".into(), Tone::Normal)));
+        assert_eq!(line_feature("jade.lootTable"), Feature::LootTable);
+        assert_eq!(line_feature("jade.access.held_item.off"), Feature::HeldItem);
     }
 
     #[test]
