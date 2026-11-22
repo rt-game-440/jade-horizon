@@ -20,6 +20,7 @@
 
 | Jade for Horizon | Horizon | SDK | mod API | Minecraft |
 | --- | --- | --- | --- | --- |
+| 0.3.0 | nightly-2026-11-19 | `5ef7734` | 0.2 | 26.3 |
 | 0.2.0 | nightly-2026-11-19 | `5ef7734` | 0.2 | 26.3 |
 | 0.1.0 | nightly-2026-11-19 | `5ef7734` | 0.2 | 26.3 |
 
