@@ -47,7 +47,8 @@ Client only:
 - Harvest info: which tool the block needs and whether your held tool can collect its drops
 - Fluids: pointing at water, lava, etc. shows the name and a bucket icon (enabled by default, as in Jade)
 - Distance to the target and the block face you are aiming at (off by default; enable in settings)
-- Hold Shift for details: container contents are one line by default, and long-tail info such as breeding cooldown and growth time moves to the detailed view
+- Debug info (off by default, in the Debug group at the bottom of the settings page): block / entity registry name, block state properties (up to 12 lines), loot table and seed (needs the server install, and a player allowed to use command blocks)
+- Hold Shift for details: container contents are one line by default, and long-tail info such as breeding cooldown, growth time, held items, entity variant (cat, frog, wolf, ...) and candle / turtle egg counts moves to the detailed view
 
 Additionally shown when the server has it installed:
 
@@ -71,7 +72,8 @@ In game: "Options > Mods > Jade":
 - Theme: Classic (Vanilla-like), Dark, Light, High contrast (text/background contrast of at least 4.5:1), or Custom: set background, border, title, text and mod-name colours on the settings page
 - Animation: fade when the target changes, smooth size transitions
 - Per-item toggles: health, armor, potions, horse stats, villagers, owner, container contents, furnace progress, crops, redstone, harvest tool and progress, fluids, drops, mod name,
-  distance, block face, waxed, zombie villager conversion, villager restock, pet armor, player head, sign, command block
+  distance, block face, waxed, zombie villager conversion, villager restock, pet armor, player head, sign, command block, held items, entity variant, block amount,
+  plus registry name, block states and loot table in the Debug group
 - Debug stats: when on, network counters are written to `horizon-mod-data/jade/perf.json` every 10 seconds (used by `tools/perf.py`; off by default)
 
 ### Hide list
