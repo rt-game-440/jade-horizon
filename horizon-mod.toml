@@ -1,6 +1,6 @@
 id = "jade"
 name = "Jade for Horizon"
-version = "0.2.0"
+version = "0.3.0"
 description = "Shows information about what you are looking at. An unofficial Rust port of Snownee's Jade to Horizon."
 authors = ["Snownee (original Jade)", "jade-horizon contributors"]
 license = "CC-BY-NC-SA-4.0"
@@ -12,5 +12,5 @@ side = "client"
 capabilities = ["registries"]
 
 [wasm]
-sha512 = "e11d06664a0f6aa2fa99cade41e94a7180d8758cf448f25a80aae8b74438b236cb94848730d10bced523bf8e5b60f3822a725fada4059fb6ad1ed7d8a24ce930"
+sha512 = "5ff5fd3b03985608e6bed283905b0285127a6255bb8f4ebf5b1eedc80fbbaf85d3c481742d76e3956bcb122fcff2fc280a56d25cffaeb3e561ce055fb3128499"
 toolchain = "1.99.1 58cf8f9c35b355199727627d07ae34a4e2846d67"
